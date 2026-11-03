@@ -156,24 +156,30 @@ python tools\ingame_test_r1delta.py collect --session test-output\delta-session.
 python tools\ingame_test_r1delta.py cleanup --session test-output\delta-session.json
 ```
 
-The cfg enables a unique console log, mounts addons, includes a run-specific
-script, and closes the console. The script waits for Playing and another twelve
+The cfg enables `developer 1` and `sv_cheats 1` in the local match, loads the
+run-specific source with `IncludeFile`, and closes the console. Addons must already
+be mounted; restart the game after first preparation if necessary. The script
+waits for Playing and another twelve
 seconds before placing the models above nearby terrain, levels the camera, runs
 five pose/attachment samples and collision/optional physics probes, requests a
 screenshot, and leaves the scene open. `--sequence`, `--attachment`, and `--physics`
 are prepare options. Use multiple mappings for a native control beside the rebuild.
 Use a new session/model path for each compile to avoid engine model-cache reuse.
 
-`collect --timeout 90` watches only that run's log. `--log path/to/condump.txt`
+`collect --timeout 90` watches fresh native console dumps for that run's BEGIN
+boundary. The listen-server script exports the dump automatically when finished.
+`--log path/to/condump.txt`
 can evaluate an explicitly saved console dump instead. Reports include staged
 hashes, requested probes, exact model paths, and hashes of newly found screenshots.
 `server_passed` records the smoke probes; `visual_passed` and overall `passed`
 remain false because log events cannot establish visible geometry. Review the
-screenshots separately. The automatic screenshot and one-command flow still need
-live R1Delta verification; unit tests alone do not validate engine commands.
+screenshots separately. The one-command scene, automatic screenshot, console dump
+and collection were
+verified in a live R1Delta local match. The compiled box still fails visual review.
 
 Cleanup removes only the owned addon, its unchanged cfg and its addon-list entry;
 other addon changes made during testing survive. It preserves logs/screenshots.
-The cfg enables console logging for the test session: run `con_logfile ""` in the
-game console to stop it afterward. This attach harness does not claim unattended
+The cfg enables developer/cheat commands for this local test session; restore
+your preferred `developer` and `sv_cheats` values afterward. This attach harness
+does not claim unattended
 launcher-to-match automation.

@@ -18,3 +18,11 @@ Read README.md, VALIDATION.md and docs/mdl-v52-format.md before changing the wri
 - A v52 version field or structural parse alone is not proof of runtime correctness.
 - Research extractor modifications belong in ignored test-output, not the compiler.
 - Test reports must identify the executable and reader hashes used for their run.
+
+- R1Delta attach tests: tools/ingame_test_r1delta.py uses IncludeFile, not
+  IncludeScript, for loose source. Local script commands silently do nothing with
+  sv_cheats=0. Use developer=1 and sv_cheats=1 for this isolated local test.
+- R1Delta con_logfile accepted a name but wrote no file. Listen-server
+  ServerCommand("screenshot") and ServerCommand("condump") were verified;
+  ClientCommand screenshot did not export one. Preserve raw dumps, then evaluate
+  only the explicit run BEGIN boundary; never hide diagnostics within that run.

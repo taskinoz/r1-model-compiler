@@ -22,9 +22,11 @@ def digest(path):
 
 def delta_script(run_id, models, sequence='', attachment='', physics=False):
     text = common.script(run_id, models, sequence, attachment, physics)
+    text = text.replace('foreach ( model in R1C_PATHS )','R1C_Log( "BEGIN" )\nforeach ( model in R1C_PATHS )')
+    text = text.replace('if ( hasPlayer ) ClientCommand( player, "screenshot" )','if ( hasPlayer ) ServerCommand( "screenshot" )')
     text = text.replace('    wait 2.0\n    local props', '    wait 1.0\n    local props')
     text = text.replace('origin + fwd *', 'origin + Vector(0,0,80) + fwd *')
-    text = text.replace('ServerCommand( "quit" )', 'R1C_Log( "READY_FOR_VISUAL" )')
+    text = text.replace('ServerCommand( "quit" )', 'R1C_Log( "READY_FOR_VISUAL" ); ServerCommand( "condump" )')
     text = text.replace('    thread R1C_Run( player )', '    thread R1C_Grounded( player )')
     text += '''
 function R1C_Grounded( player )
@@ -92,7 +94,7 @@ def prepare(game, mounts, sequence='', attachment='', physics=False):
         script_path = scripts/('r1c_'+run_id+'.nut')
         script_path.write_text(script,encoding='utf-8')
         cfg.parent.mkdir(parents=True,exist_ok=True)
-        cfg.write_text('con_logfile "r1c_'+run_id+'.log"\nupdate_addon_paths\nscript IncludeScript("r1c_'+run_id+'", getroottable())\ntoggleconsole\n',encoding='utf-8')
+        cfg.write_text('developer 1\nsv_cheats 1\nscript IncludeFile("r1c_'+run_id+'")\ntoggleconsole\n',encoding='utf-8')
         updated = original[:original.rfind('}')]+'"'+addon.name+'" "1"\n'+original[original.rfind('}'):]
         listing.write_text(updated,encoding='utf-8')
         return {'run_id':run_id,'game':str(game),'addon':str(addon),'cfg':str(cfg),
@@ -113,9 +115,15 @@ def prepare(game, mounts, sequence='', attachment='', physics=False):
 
 
 def collect(session, text):
+    marker = '[R1C:'+session['run_id']+'] BEGIN'
+    lines = text.splitlines(keepends=True)
+    starts = [i for i,line in enumerate(lines) if marker in line]
+    if starts: text = ''.join(lines[starts[-1]:])
     result = common.evaluate(text,session['run_id'],len(session['models']),
                              sequence=session['sequence'],attachment=session['attachment'],
                              physics=session['physics'],paths=[m['mount'] for m in session['models']])
+    if not starts: result['issues'].append('run BEGIN boundary missing')
+    if len(starts) > 1: result['issues'].append('run ID reused; prepare a fresh session')
     if 'READY_FOR_VISUAL' not in result['events']:
         result['issues'].append('scene did not finish screenshot request')
     for index in range(len(session['models'])):
@@ -165,7 +173,7 @@ def main(argv=None):
     stage.add_argument('models',nargs='+')
     read = sub.add_parser('collect')
     read.add_argument('--session',type=Path,required=True)
-    read.add_argument('--log',type=Path,help='Explicit fresh console dump; otherwise watch the run-specific log')
+    read.add_argument('--log',type=Path,help='Explicit console dump; otherwise watch fresh run-specific condump output')
     read.add_argument('--timeout',type=float,default=90)
     read.add_argument('--report',type=Path,required=True)
     clean = sub.add_parser('cleanup')
@@ -183,12 +191,16 @@ def main(argv=None):
     session = json.loads(a.session.read_text(encoding='utf-8'))
     if a.action == 'cleanup':
         cleanup(session)
-        print('Removed owned addon and cfg; console logging is unchanged. Use con_logfile "" to stop it.')
+        print('Removed owned addon and cfg; preserved console dumps and screenshots.')
         return 0
     if not 0 <= a.timeout <= 3600: p.error('timeout must be between 0 and 3600 seconds')
     path = a.log or Path(session['game'])/'r1'/('r1c_'+session['run_id']+'.log')
     deadline = time.monotonic()+a.timeout
     while True:
+        if not a.log:
+            candidates = [f for f in (Path(session['game'])/'r1').glob('condump*.txt') if f.stat().st_mtime_ns > session['prepared_at_ns']]
+            matches = [f for f in candidates if '[R1C:'+session['run_id']+'] BEGIN' in f.read_text(encoding='utf-8',errors='replace')]
+            if matches: path = max(matches,key=lambda f:f.stat().st_mtime_ns)
         text = path.read_text(encoding='utf-8',errors='replace') if path.exists() else ''
         result = collect(session,text)
         if result['server_passed'] or time.monotonic() >= deadline or a.log: break
@@ -199,8 +211,12 @@ def main(argv=None):
             for capture in directory.iterdir():
                 if capture.is_file() and capture.suffix.lower() in ('.tga','.jpg','.png') and capture.stat().st_mtime_ns > session['prepared_at_ns']:
                     screenshots.append({'path':str(capture),'sha256':digest(capture),'reviewed':False})
-    report = {**session,**result,'status':'collected','log':str(path),'screenshots':screenshots}
+    report = {**session,**result,'status':'collected','log':str(path),'screenshots':screenshots,
+              'collector_sha256':digest(__file__),'raw_log_sha256':hashlib.sha256(text.encode('utf-8')).hexdigest()}
     a.report.parent.mkdir(parents=True,exist_ok=True)
+    snapshot = a.report.with_suffix('.console.txt')
+    snapshot.write_text(text,encoding='utf-8')
+    report['console_snapshot'] = str(snapshot)
     a.report.write_text(json.dumps(report,indent=2),encoding='utf-8')
     print(json.dumps({k:report[k] for k in ('server_passed','visual_passed','passed','issues')}))
     return 0 if result['server_passed'] else 1

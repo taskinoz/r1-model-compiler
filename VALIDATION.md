@@ -206,3 +206,36 @@ changed cfg removal, validating inputs before game mutation, and keeping visual
 validation false even when server telemetry passes. Preparation never counts as
 a runtime pass. The new cfg/bootstrap and screenshot collection are staged for
 live verification; they are not yet claimed to work unattended in R1Delta.
+
+
+## Live R1Delta harness verification (4 November 2026)
+
+The initial cfg did not execute server scripts because the restarted local match
+had sv_cheats=0. Enabling developer=1 and sv_cheats=1 restored the server probe.
+IncludeScript failed to load the loose source; the native IncludeFile helper
+successfully loaded it. con_logfile accepted the filename but produced no file.
+The corrected harness therefore uses IncludeFile and native ServerCommand calls
+for screenshot and condump; it no longer refreshes addon search paths mid-match.
+The earlier audio warning from that refresh is preserved in the failed bootstrap
+console evidence. No core scripts or authentication settings were changed.
+
+The corrected exec was observed at 778.957 seconds in the current listen server.
+It logged BEGIN, both expected model paths, samples 0 through 4 for each model,
+DONE, screenshot, READY_FOR_VISUAL and condump. The collector automatically found
+condump007.txt and returned server_passed=true with no issues. It preserves the
+raw console snapshot and hashes it separately from the portion beginning at the
+explicit run boundary. Earlier failed bootstrap diagnostics remain in the raw
+snapshot; diagnostics after BEGIN fail the run. Reused BEGIN boundaries also fail.
+
+Evidence: test-output/r1delta-harness-report.json and its .console.txt snapshot;
+test-output/r1delta-harness-live/scene.png is a viewable copy of the automatic TGA.
+TGA SHA-256: d595a681e5b6599cfb70e6c14bdbff9039fb4d4e6c3fd1e3f1afffae3328aa9c.
+The static box trace again hits at 64.0313 inches. The automatic screenshot was
+inspected: native ERROR controls render, while the compiled box remains invisible.
+The older diagnostic addon was still mounted, so several native controls remain
+in the scene. This is a successful harness/server smoke test and a FAILED model
+rendering test, not native compiler completion or an equivalence pass.
+
+Compiler hash remains fdd9852c629b6caab26b930f90f6be7e8c333b961611481b8480a779ea6120a4.
+The 36-test suite includes cfg developer-gate ordering, native IncludeFile loading,
+automatic screenshot/dump generation and strict run-boundary regression checks.

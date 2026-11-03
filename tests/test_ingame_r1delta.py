@@ -33,10 +33,15 @@ class DeltaHarnessTests(unittest.TestCase):
         self.assertTrue((addon/'models/test/box.mdl').exists())
         cfg=Path(session['cfg']).read_text()
         self.assertIn('toggleconsole',cfg)
+        self.assertLess(cfg.index('sv_cheats 1'),cfg.index('script IncludeFile'))
+        self.assertIn('developer 1',cfg)
+        self.assertNotIn('update_addon_paths',cfg)
         self.assertLess(max(map(len,cfg.splitlines())),248)
         script=next((addon/'scripts/vscripts').glob('*.nut')).read_text()
         self.assertIn('WaittillGameStateOrHigher( eGameState.Playing )',script)
         self.assertIn('wait 12.0',script)
+        self.assertIn('ServerCommand( "condump" )',script)
+        self.assertIn('ServerCommand( "screenshot" )',script)
         self.assertNotIn('ServerCommand( "quit" )',script)
         self.assertFalse(session['passed'])
         listing.write_text(listing.read_text().replace('"UserMod" "1"','"UserMod" "0"\n"LaterMod" "1"'))
@@ -61,7 +66,7 @@ class DeltaHarnessTests(unittest.TestCase):
     def test_server_pass_does_not_claim_visual_validation(self):
         run='a'*32
         session={'run_id':run,'models':[{'mount':'models/test/box.mdl'}], 'sequence':'','attachment':'','physics':False}
-        events=['INIT','PRECACHE models/test/box.mdl','SPAWN 0 model=models/test/box.mdl origin=<0,0,0>','DONE','READY_FOR_VISUAL']+[f'POSE 0 sample={i} origin=<0,0,0>' for i in range(5)]
+        events=['BEGIN','INIT','PRECACHE models/test/box.mdl','SPAWN 0 model=models/test/box.mdl origin=<0,0,0>','DONE','READY_FOR_VISUAL']+[f'POSE 0 sample={i} origin=<0,0,0>' for i in range(5)]
         text='\n'.join('[R1C:'+run+'] '+e for e in events)
         result=delta.collect(session,text)
         self.assertTrue(result['server_passed'])
@@ -71,6 +76,9 @@ class DeltaHarnessTests(unittest.TestCase):
         self.assertFalse(delta.collect(session,text+'\nSCRIPT ERROR')['server_passed'])
         self.assertFalse(delta.collect(session,text.replace('POSE 0 sample=2','OTHER'))['server_passed'])
         self.assertFalse(delta.collect(session,text.replace('READY_FOR_VISUAL','OTHER'))['server_passed'])
+        self.assertFalse(delta.collect(session,text.replace('BEGIN','OTHER'))['server_passed'])
+        self.assertFalse(delta.collect(session,text+'\n[R1C:'+run+'] BEGIN')['server_passed'])
+        self.assertTrue(delta.collect(session,'SCRIPT ERROR before the run\n'+text)['server_passed'])
 
 
 if __name__=='__main__': unittest.main()
