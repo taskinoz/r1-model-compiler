@@ -63,3 +63,29 @@ were retained. The modified extraction code is ignored and is not compiler code.
 The TF2 validation history under `docs/reference/v53-validation.md` belongs only to
 the parent v53 compiler; none of its corpus/runtime results establish v52 coverage.
 Native runtime and corpus evidence are required before a stable release.
+
+## Runtime harness work, 3 November 2026
+
+- Added tools/ingame_test52.py for TFORevive. Native inspections and complete model
+  companion staging/hashes are performed before launching. A unique owned mod is
+  cleaned up after preparation, failure or completion. Core mod files are untouched.
+- Added 11 harness regressions: staging/cleanup, checksum failure before mutation,
+  foreign/outside cleanup rejection, path/script injection rejection, complete vs
+  partial/wrong-run/wrong-model telemetry, runtime errors, required attachment/
+  physics samples, and explicitly nonpassing prepare-only reports.
+- Total: 25 Python tests pass (14 compiler + 11 harness); CTest and locked uv pass.
+- A real preparation run mounted the freshly compiled static box and original TF1
+  error-model control with all companions. Cleanup succeeded. This is staging
+  evidence only: test-output/tfo-prepare.json.
+- Real launch attempts: test-output/tfo-runtime-static.json and
+  test-output/tfo-runtime-bin-cwd.json. The installed D:\Games\Titanfall Online\Bin\TFO.exe
+  (SHA256 1569b5b66dba1773dd04c7a0122bbf99a836e34177c7efcfe078944cf1faad5f)
+  exited with 0xC0000409 before creating fresh runtime logs. No INIT, spawn or pose
+  telemetry was received. Both reports correctly fail and confirm mod cleanup.
+- Installed R1Delta 2.14.15 was launched separately with its configured original
+  Titanfall game root. It displayed R1Delta Launcher Error and exited before a map;
+  the dialog disappeared before its body could be captured, so the exact cause is
+  unconfirmed. No R1Delta model-validation pass is claimed.
+- No game process or harness mod was left running. Neither native engine reached
+  the actual model probes; Squirrel integration and runtime correctness remain
+  unvalidated. Do not upgrade the compiler's experimental status from these runs.

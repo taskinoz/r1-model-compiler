@@ -77,3 +77,38 @@ The old Northstar harness is TF2-specific and must not be used to claim TF1 resu
 
 Avoid keeping repeated corpus rebuilds. Preserve small JSON/log reports and delete
 recreatable output after a run; retail samples should remain outside version control.
+
+## Titanfall Online runtime harness
+
+`tools/ingame_test52.py` stages a temporary TFORevive mod, mounts every companion
+with verified hashes, and appends a test-script include to a temporary copy of the
+installed core map-spawn script. It does not edit the original core mod. It launches
+the installed `Bin/TFO.exe` on a local map, collects run-specific telemetry and
+removes its owned mod when finished. Close an existing TFO game before running it.
+
+```powershell
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --sequence= --report test-output\tfo-static.json out\box.mdl=models/r1c_test/box.mdl
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --sequence bend --attachment probe --report test-output\tfo-animation.json out\animated.mdl=models/r1c_test/animated.mdl
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --physics --report test-output\tfo-physics.json out\physics.mdl=models/r1c_test/physics.mdl
+```
+
+Multiple model mappings allow a compiled model and native control side by side.
+An empty `--sequence=` skips animation for static controls that have different
+sequence names. `--prepare-only` validates staging without launching; its report
+always has `passed: false`, and the mod is still cleaned up. `--keep-mod` retains
+it for debugging. `--cwd-bin` tests older builds that expect Bin as their working
+folder. `TITANFALL_ONLINE_DIR` can supply the game directory.
+
+Reports contain native inspections, mounted SHA-256 hashes, executable/harness/
+reader hashes, requested command, per-run events, exit code and cleanup outcome.
+The script logs model precaches/spawns, sequence lookup/playback, traces, five pose
+and optional attachment samples, and physics drop distances. New screenshots in
+known screenshot folders are listed with hashes; visually inspect these separately.
+A smoke-test pass is not full render/animation/collision equivalence.
+
+**Current runtime status:** preparation and harness regressions pass, but the
+installed TFORevive executable exits with `0xC0000409` before logging or loading a
+map (both root and Bin working directories). A separate installed R1Delta probe
+also stopped at its launcher error dialog. Neither attempted launch validates the
+compiler output. The generated Squirrel script and actual model probes still need
+an operational game runtime. See VALIDATION.md for the recorded evidence.
