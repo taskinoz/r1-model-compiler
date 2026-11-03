@@ -9,7 +9,7 @@ fully validated replacement for Respawn/Valve studiomdl.
   `f24f5c450464f67e9ca09c2270986999dd1e9196d886ac26e58c9ca60592c42f`.
 - Independent reader `tools/mdl52.py` SHA-256:
   `0da97fb62ba116639f5fe890b87f9a4d2b6351c69650820caee6e137a6eb3a7e`.
-- 14 native Python regression tests pass. Both CTest groups pass. Locked uv route
+- 30 Python regression tests pass (14 compiler, 16 harness). Both CTest groups pass. Locked uv route
   also passes, using the standard library only.
 - Static, rigid physics and jointed/animated authored examples compile into native
   v52 MDL and separate companions. Generated PHY solids are independently parsed.
@@ -51,7 +51,7 @@ were retained. The modified extraction code is ignored and is not compiler code.
 
 ## Not yet validated or implemented
 
-- Loading/rendering/playback/physics in original Titanfall and Titanfall Online.
+- Original Titanfall runtime, full TFO client rendering, and broader playback/physics coverage beyond the dedicated-server smoke tests below.
 - Native retail decompile/recompile and full-frame/render/collision equivalence.
 - Retail frame-encoded and external ANI animation decoding. The initial reader
   only decodes compiler-produced RLE, and rejects raw encodings explicitly.
@@ -89,3 +89,53 @@ Native runtime and corpus evidence are required before a stable release.
 - No game process or harness mod was left running. Neither native engine reached
   the actual model probes; Squirrel integration and runtime correctness remain
   unvalidated. Do not upgrade the compiler's experimental status from these runs.
+
+
+## Successful TFO server runtime checks, 4 November 2026
+
+This supersedes the earlier statement that no runtime reached the probes. The
+initial direct client failure was an absent launcher argument: the installed
+TFO.exe requires `--authToken` even when `-noauth` is used by the SDK. Supplying
+the literal non-credential `r1c-local-noauth` with `-noauth` starts the engine and
+mounts the temporary mod. No account token is read or required. The client then
+crashes before the model probes with stack overflow 0xC00000FD in nvwgf2umx.dll.
+No Windows security settings or game binaries were changed.
+
+The dedicated adapter launches installed `Bin/tfods.exe -noauth -dedicated` with
+local-server settings. It runs on mp_nexus without a player or renderer, waits for
+EntitiesDidLoad, selects a real map spawn point and uses native TF1 vector methods.
+The actual script execution exposed and fixed the original TF2-style vector call.
+
+| Case | Runtime evidence | Report |
+|---|---|---|
+| Static | Compiled box and original TF1 error-model control both spawn; five pose samples each; compiled box trace hit at 64.0313 inches | tfo-dedicated-static-final.json |
+| Animation | bend resolves as sequence 1; five probe samples move by up to 16.542787509626258 inches; model trace hit at 6.03125 inches | tfo-dedicated-animation.json |
+| Physics | Compiled rigid model drops 135.535 inches and settles; native TFO domestic/pizza_box control drops 121.785 inches; five samples each | tfo-dedicated-physics.json |
+
+All three reports pass with exit code 0 and mod_removed:true. The compiler binary
+remains f24f5c450464f67e9ca09c2270986999dd1e9196d886ac26e58c9ca60592c42f.
+Each report records the exact native executable, harness, reader and mounted
+companion hashes. test-output/tfo-server-runtime-summary.json checks source hashes
+again and re-evaluates preserved runtime logs using the final stricter evaluator:
+required compiled-model trace hits and at least 1 inch of animated attachment motion.
+Original runtime reports retain their original harness hashes; offline re-evaluation
+is identified separately and does not masquerade as a new game run.
+
+The first static server run used a broad trace at world origin, which hit map
+geometry. That trace is not counted as collision evidence. The final static and
+animation tests use spawn points and model-bounded traces, with positive hits.
+
+These are SERVER-ONLY smoke tests, not visual proof, native retail roundtrips,
+full-frame equivalence or complete ragdoll/procedural/LOD support. The client GPU
+crash still prevents rendering validation. Physics control geometry differs from
+the authored box, so its drop distance is a functional control, not an equality test.
+
+Updated R1Delta 3.0.4 was also tried. Direct Titanfall.exe explicitly requires its
+launcher and reports Failed to start the launcher when called without that parent.
+The configured r1delta.exe entry points and normal desktop launch were retried but
+did not expose a targetable game window or reach a map. No updated R1Delta runtime
+model pass is claimed.
+
+Four more harness regressions cover mandatory no-auth launcher arguments, headless
+executable routing, required trace hits and required attachment motion; a fifth
+covers log truncation/append freshness. Total 30 tests, CTest and locked uv pass.

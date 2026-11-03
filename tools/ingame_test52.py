@@ -8,6 +8,7 @@ import csv
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -36,23 +37,35 @@ function R1C_Run( player )
     wait 2.0
     local props = []
     local starts = []
-    local fwd = AnglesToForward( Vector( 0, player.EyeAngles().y, 0 ) )
-    local right = AnglesToRight( Vector( 0, player.EyeAngles().y, 0 ) )
+    local hasPlayer = IsValid( player )
+    local origin = hasPlayer ? player.GetOrigin() : Vector(0,0,128)
+    if ( !hasPlayer )
+    {
+        local points = GetEntArrayByClass_Expensive( "info_spawnpoint_titan" )
+        if ( points.len() == 0 ) points = GetEntArrayByClass_Expensive( "info_spawnpoint_human" )
+        if ( points.len() == 0 ) { R1C_Log( "FAIL no map spawn point" ); ServerCommand( "quit" ); return }
+        origin = points[0].GetOrigin() + Vector(0,0,16)
+    }
+    local yaw = hasPlayer ? player.EyeAngles().y : 0
+    local ignore = []
+    if ( hasPlayer ) ignore.append( player )
+    local fwd = Vector( 0, yaw, 0 ).AnglesToForward()
+    local right = Vector( 0, yaw, 0 ).AnglesToRight()
     for ( local i = 0; i < R1C_PATHS.len(); i++ )
     {
         local model = R1C_PATHS[i]
-        local pos = player.GetOrigin() + fwd * 180 + right * ( (i - (R1C_PATHS.len()-1)*0.5)*100 - 70 )
+        local pos = origin + fwd * (hasPlayer ? 180 : 0) + right * ( (i - (R1C_PATHS.len()-1)*0.5)*100 - (hasPlayer ? 70 : 0) )
         local prop
         if ( %PHYSICS% )
         {
             prop = CreateEntity( "prop_physics" )
             prop.kv.model = model
             prop.SetOrigin( pos + Vector( 0, 0, 120 ) )
-            prop.SetAngles( Vector( 0, player.EyeAngles().y+180, 0 ) )
+            prop.SetAngles( Vector( 0, yaw+180, 0 ) )
             DispatchSpawn( prop )
         }
         else
-            prop = CreatePropDynamic( model, pos, Vector( 0, player.EyeAngles().y+180, 0 ), 6 )
+            prop = CreatePropDynamic( model, pos, Vector( 0, yaw+180, 0 ), 6 )
         if ( !IsValid( prop ) )
         {
             R1C_Log( "FAIL spawn " + i )
@@ -71,8 +84,8 @@ function R1C_Run( player )
                 R1C_Log( "ANIM " + i + " sequence=%SEQ% index=" + seq )
             }
         }
-        local tr = TraceLine( pos + Vector(0,0,400), pos - Vector(0,0,16), [player], TRACE_MASK_SHOT, TRACE_COLLISION_GROUP_NONE )
-        R1C_Log( "TRACE " + i + " hit=" + ( tr.hitEnt == prop ) + " z=" + (tr.endPos.z-pos.z) )
+        local tr = TraceLine( prop.GetOrigin() + Vector(0,0,prop.GetBoundingMaxs().z+4), prop.GetOrigin() + Vector(0,0,prop.GetBoundingMins().z-4), ignore, TRACE_MASK_SHOT, TRACE_COLLISION_GROUP_NONE )
+        R1C_Log( "TRACE " + i + " hit=" + ( tr.hitEnt == prop ) + " z=" + (tr.endPos.z-prop.GetOrigin().z) )
     }
     for ( local sample = 0; sample < 5; sample++ )
     {
@@ -94,7 +107,7 @@ function R1C_Run( player )
         for ( local i = 0; i < props.len(); i++ )
             R1C_Log( "PHYSICS " + i + " drop=" + (starts[i].z-props[i].GetOrigin().z) )
     R1C_Log( "DONE" )
-    player.ClientCommand( "screenshot" )
+    if ( hasPlayer ) player.ClientCommand( "screenshot" )
     wait 2.0
     ServerCommand( "quit" )
 }
@@ -105,6 +118,13 @@ foreach ( model in R1C_PATHS )
 }
 AddCallback_OnPlayerRespawned( R1C_OnSpawn )
 R1C_Log( "INIT" )
+function R1C_Headless()
+{
+    FlagWait( "EntitiesDidLoad" )
+    R1C_STARTED = true
+    R1C_Run( null )
+}
+if ( %DEDICATED% ) thread R1C_Headless()
 '''
 
 
@@ -128,7 +148,7 @@ def parse_mount(value):
     return path,game_path(target)
 
 
-def script(run_id,models,sequence,attachment,physics):
+def script(run_id,models,sequence,attachment,physics,dedicated=False):
     if not re.fullmatch(r'[a-f0-9]{32}',run_id):
         raise ValueError('invalid run ID')
     for label,value in [('sequence',sequence),('attachment',attachment)]:
@@ -136,7 +156,7 @@ def script(run_id,models,sequence,attachment,physics):
             raise ValueError(f'invalid {label}')
     return (SERVER.replace('%MODELS%',json.dumps(models)).replace('%RUN%',run_id)
             .replace('%SEQ%',sequence).replace('%ATTACH%',attachment)
-            .replace('%PHYSICS%','true' if physics else 'false'))
+            .replace('%PHYSICS%','true' if physics else 'false').replace('%DEDICATED%','true' if dedicated else 'false'))
 
 
 def safe_cleanup(mod,mods,run_id):
@@ -157,7 +177,7 @@ def safe_cleanup(mod,mods,run_id):
     shutil.rmtree(mod)
 
 
-def prepare(game,mounts,run_id,sequence='idle',attachment='',physics=False):
+def prepare(game,mounts,run_id,sequence='idle',attachment='',physics=False,dedicated=False):
     if not re.fullmatch(r'[a-f0-9]{32}',run_id):
         raise ValueError('invalid run ID')
     mods=game/'Mods'
@@ -198,17 +218,18 @@ def prepare(game,mounts,run_id,sequence='idle',attachment='',physics=False):
         # The installed game script is used only in this temporary local override.
         # Proprietary script contents are never included in the repository/report.
         (scripts/'_mapspawn.nut').write_bytes(base_bytes+b'\nIncludeScript( "r1c_model_test", getroottable() )\n')
-        (scripts/'r1c_model_test.nut').write_text(script(run_id,[t for _,t in mounts],sequence,attachment,physics),encoding='utf-8')
+        (scripts/'r1c_model_test.nut').write_text(script(run_id,[t for _,t in mounts],sequence,attachment,physics,dedicated),encoding='utf-8')
         return mod,evidence,hashlib.sha256(base_bytes).hexdigest()
     except BaseException:
         safe_cleanup(mod,mods,run_id)
         raise
 
 
-def evaluate(text,run_id,expected,sequence='idle',attachment='',physics=False,paths=None):
+def evaluate(text,run_id,expected,sequence='idle',attachment='',physics=False,paths=None,required_traces=(),min_attachment_displacement=0.):
     marker=f'[R1C:{run_id}] '
     lines=[line.split(marker,1)[1].strip() for line in text.splitlines() if marker in line]
     issues=[]
+    attachment_displacements={}
     if 'INIT' not in lines: issues.append('harness script did not initialize')
     if 'DONE' not in lines: issues.append('harness did not complete')
     for i in range(expected):
@@ -222,10 +243,47 @@ def evaluate(text,run_id,expected,sequence='idle',attachment='',physics=False,pa
         if physics:
             drops=[float(m[1]) for l in lines if (m:=re.fullmatch(rf'PHYSICS {i} drop=([-+0-9.eE]+)',l))]
             if not drops or drops[0]<=1: issues.append(f'model {i} did not demonstrate a physics drop')
+    for index in required_traces:
+        if not any(l.startswith(f'TRACE {index} hit=true ') for l in lines):
+            issues.append(f'model {index} required collision trace did not hit')
+    if attachment:
+        for i in range(expected):
+            points=[]
+            for line in lines:
+                if line.startswith(f'ATTACH {i} ') and ' pos=' in line:
+                    vector=line.split(' pos=',1)[1].split(' ang=',1)[0]
+                    values=re.findall(r'[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?',vector)
+                    if len(values)==3:
+                        point=tuple(map(float,values))
+                        if all(math.isfinite(v) for v in point): points.append(point)
+            displacement=max((math.dist(a,b) for a in points for b in points),default=0.)
+            attachment_displacements[str(i)]=displacement
+            if min_attachment_displacement>0 and displacement<min_attachment_displacement:
+                issues.append(f'model {i} attachment did not demonstrate required motion')
     issues.extend(l for l in lines if l.startswith('FAIL '))
     for pattern in ('SCRIPT ERROR','AN ERROR HAS OCCURRED','Error loading model','checksum mismatch','wrong model version'):
         if pattern.lower() in text.lower(): issues.append('runtime diagnostic: '+pattern)
-    return {'passed':not issues,'issues':issues,'events':lines}
+    return {'passed':not issues,'issues':issues,'events':lines,'attachment_displacements':attachment_displacements}
+
+
+def launch_command(game,map_name,dedicated=False):
+    if not re.fullmatch('[A-Za-z0-9_]+',map_name):
+        raise ValueError('invalid map')
+    if dedicated:
+        command=[str(game/'Bin/tfods.exe'),'-noauth','-dedicated']
+    else:
+        # TFO.exe requires this argument even when the SDK's -noauth mode is used.
+        # This literal is not a credential and is never replaced with an account token.
+        command=[str(game/'Bin/TFO.exe'),'--authToken','r1c-local-noauth','-noauth',
+                 '-novid','-windowed','-w','1280','-h','720']
+    return command+['+sv_lan','1','+sv_cheats','1','+developer','1','+map',map_name]
+
+
+def read_runtime_log(path,original_size,original_prefix):
+    if not path.exists(): return ''
+    data=path.read_bytes()
+    offset=original_size if len(data)>=original_size and data[:len(original_prefix)]==original_prefix else 0
+    return data[offset:].decode('utf-8',errors='replace')
 
 
 def main(argv=None):
@@ -235,7 +293,10 @@ def main(argv=None):
     parser.add_argument('--map',default='mp_nexus')
     parser.add_argument('--sequence',default='idle')
     parser.add_argument('--attachment',default='')
+    parser.add_argument('--min-attachment-displacement',type=float,default=0.,help='minimum sampled world-space displacement in inches')
+    parser.add_argument('--require-trace',type=int,action='append',default=[],help='require the trace for this model index to hit its prop; repeatable')
     parser.add_argument('--physics',action='store_true')
+    parser.add_argument('--dedicated',action='store_true',help='server-only loading/animation/physics checks; no rendering claim')
     parser.add_argument('--timeout',type=float,default=150)
     parser.add_argument('--report',type=Path,required=True)
     parser.add_argument('--prepare-only',action='store_true',help='prepare and inspect temporary files without launching; not a runtime pass')
@@ -246,12 +307,15 @@ def main(argv=None):
     if args.game is None: parser.error('--game or TITANFALL_ONLINE_DIR is required')
     if not re.fullmatch('[A-Za-z0-9_]+',args.map): parser.error('invalid map')
     if not 1<=args.timeout<=600: parser.error('timeout must be 1..600 seconds')
+    if args.min_attachment_displacement<0 or not math.isfinite(args.min_attachment_displacement): parser.error('invalid displacement threshold')
+    if args.min_attachment_displacement>0 and not args.attachment: parser.error('motion threshold requires --attachment')
+    if any(i<0 or i>=len(args.models) for i in args.require_trace): parser.error('trace index outside model list')
     game=args.game.resolve(strict=True)
     run_id=uuid.uuid4().hex
     args.report.parent.mkdir(parents=True,exist_ok=True)
     report={'run_id':run_id,'engine':'TFORevive','date':datetime.now(timezone.utc).isoformat(),
-            'game':str(game),'passed':False,'status':'preparing','issues':[],
-            'test_options':{'map':args.map,'sequence':args.sequence,'attachment':args.attachment,'physics':args.physics,'cwd_bin':args.cwd_bin}}
+            'game':str(game),'coverage':'server-only' if args.dedicated else 'client/listen-server','passed':False,'status':'preparing','issues':[],
+            'test_options':{'map':args.map,'sequence':args.sequence,'attachment':args.attachment,'physics':args.physics,'cwd_bin':args.cwd_bin,'dedicated':args.dedicated,'required_traces':args.require_trace,'min_attachment_displacement':args.min_attachment_displacement}}
     if args.compiler.is_file():
         report['compiler']={'path':str(args.compiler.resolve()),'sha256':hashlib.sha256(args.compiler.read_bytes()).hexdigest(),
                             'note':'Binary available at run time; this harness does not recompile inputs.'}
@@ -260,20 +324,22 @@ def main(argv=None):
     try:
         mounts=[parse_mount(m) for m in args.models]
         if not args.prepare_only and os.name=='nt':
-            tasks=subprocess.check_output(['tasklist','/FO','CSV','/NH','/FI','IMAGENAME eq TFO.exe'],text=True)
-            if any(row and row[0].lower()=='tfo.exe' for row in csv.reader(tasks.splitlines())):
-                raise ValueError('TFO.exe is already running; close it before starting an isolated harness run')
-        mod,evidence,base_hash=prepare(game,mounts,run_id,args.sequence,args.attachment,args.physics)
+            for image in ('TFO.exe','tfods.exe'):
+                tasks=subprocess.check_output(['tasklist','/FO','CSV','/NH','/FI','IMAGENAME eq '+image],text=True)
+                if any(row and row[0].lower()==image.lower() for row in csv.reader(tasks.splitlines())):
+                    raise ValueError(image+' is already running; close it before starting an isolated harness run')
+        mod,evidence,base_hash=prepare(game,mounts,run_id,args.sequence,args.attachment,args.physics,args.dedicated)
         report.update(models=evidence,mod=str(mod),base_mapspawn_sha256=base_hash,
                       harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                       reader_sha256=hashlib.sha256(Path(mdl52.__file__).read_bytes()).hexdigest())
         if args.prepare_only:
             report.update(status='prepared',issues=['prepare-only: game was not launched'])
             return 0
-        logs=game/'Logs/tforevive.log'
-        offset=logs.stat().st_size if logs.exists() else 0
-        command=[str(game/'Bin/TFO.exe'),'-noauth','-novid','-windowed','-w','1280','-h','720',
-                 '+sv_lan','1','+sv_cheats','1','+developer','1','+map',args.map]
+        logs=game/('Logs/tforevive_dedi.log' if args.dedicated else 'Logs/tforevive.log')
+        previous_log=logs.read_bytes() if logs.exists() else b''
+        offset=len(previous_log)
+        prefix=previous_log[:256]
+        command=launch_command(game,args.map,args.dedicated)
         report['command']=command
         report['executable_sha256']=hashlib.sha256(Path(command[0]).read_bytes()).hexdigest()
         output=args.report.with_suffix('.process.log')
@@ -283,26 +349,23 @@ def main(argv=None):
             if directory.exists():
                 screenshots.update({str(p):p.stat().st_mtime_ns for p in directory.glob('*') if p.is_file()})
         with output.open('wb') as stream:
-            process=subprocess.Popen(command,cwd=game/'Bin' if args.cwd_bin else game,stdout=stream,stderr=subprocess.STDOUT)
+            process=subprocess.Popen(command,cwd=game/'Bin' if args.cwd_bin else game,stdout=stream,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW if args.dedicated and os.name=='nt' else 0)
             report.update(status='running',pid=process.pid)
             deadline=time.monotonic()+args.timeout
             text=''
             while time.monotonic()<deadline:
                 if logs.exists():
-                    data=logs.read_bytes()
-                    # TFORevive truncates its log on startup.
-                    if len(data)<offset or run_id.encode() in data: offset=0
-                    text=data[offset:].decode('utf-8',errors='replace')
+                    text=read_runtime_log(logs,offset,prefix)
+                    if 'SCRIPT ERROR' in text and 'r1c_model_test.nut' in text:
+                        break
                     if f'[R1C:{run_id}] DONE' in text:
                         time.sleep(3)
                         break
                 if process.poll() is not None: break
                 time.sleep(1)
             if logs.exists():
-                data=logs.read_bytes()
-                if len(data)<offset or run_id.encode() in data: offset=0
-                text=data[offset:].decode('utf-8',errors='replace')
-            result=evaluate(text,run_id,len(mounts),args.sequence,args.attachment,args.physics,[t for _,t in mounts])
+                text=read_runtime_log(logs,offset,prefix)
+            result=evaluate(text,run_id,len(mounts),args.sequence,args.attachment,args.physics,[t for _,t in mounts],args.require_trace,args.min_attachment_displacement)
             report.update(result,status='passed' if result['passed'] else 'failed')
             # Keep only run-specific telemetry and redacted diagnostic context.
             diagnostic=re.sub(r'(?i)(--authToken\s+|Bearer\s+)[^\s"\r\n]+',r'\1<redacted>',text)

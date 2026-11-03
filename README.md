@@ -7,7 +7,9 @@ source frontend and build pipeline but writing the native v52 layouts.
 
 Titanfall Online's locally inspected models also use v52. They are useful format
 references, but matching that version does not establish runtime compatibility.
-**In-game validation and a native retail decompile/recompile corpus remain pending.**
+Selected **TFORevive dedicated-server loading, animation, collision and physics
+smoke tests pass**. Client rendering and a native retail decompile/recompile corpus
+remain pending.
 See [VALIDATION.md](VALIDATION.md) for the precise evidence and limitations.
 
 ## Build and use
@@ -106,9 +108,31 @@ and optional attachment samples, and physics drop distances. New screenshots in
 known screenshot folders are listed with hashes; visually inspect these separately.
 A smoke-test pass is not full render/animation/collision equivalence.
 
-**Current runtime status:** preparation and harness regressions pass, but the
-installed TFORevive executable exits with `0xC0000409` before logging or loading a
-map (both root and Bin working directories). A separate installed R1Delta probe
-also stopped at its launcher error dialog. Neither attempted launch validates the
-compiler output. The generated Squirrel script and actual model probes still need
-an operational game runtime. See VALIDATION.md for the recorded evidence.
+**Current runtime status (4 November 2026):** native dedicated-server tests pass for
+the authored static, animated and physics examples. Client startup now gets past
+the launcher argument gate but crashes in the GPU driver before the model tests.
+Full client rendering and native retail roundtrips remain unvalidated.
+
+### Direct no-auth launch and dedicated tests
+
+The installed TFO.exe requires an `--authToken` argument even when its SDK is using
+`-noauth`. The harness supplies the literal non-credential `r1c-local-noauth` and
+keeps `-noauth`; it does not read or use account tokens. Dedicated mode launches
+the installed `Bin/tfods.exe` directly, with no client token or renderer.
+
+```powershell
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --dedicated --sequence= --require-trace 0 --report test-output\tfo-static.json out\box.mdl=models/r1c_test/box.mdl
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --dedicated --sequence bend --attachment probe --min-attachment-displacement 1 --require-trace 0 --report test-output\tfo-animation.json out\animated.mdl=models/r1c_test/animated.mdl
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --dedicated --physics --report test-output\tfo-physics.json out\physics.mdl=models/r1c_test/physics.mdl
+```
+
+The headless script waits for map entities to load and uses a real spawn point.
+TF1 vector methods and model-bounded traces are used. `--require-trace INDEX`
+requires a hit on that exact model. `--min-attachment-displacement N` requires the
+sampled attachment to move at least N inches and records its maximum displacement.
+These smoke-test requirements do not assert full animation/collision equivalence.
+
+Recorded server results: static box hit at 64.0313 inches, animated probe movement
+16.5427875 inches with a collision hit, compiled physics drop 135.535 inches, native
+physics control drop 121.785 inches. All three final runs exit cleanly and remove
+their temporary mods. See VALIDATION.md for source/report hashes and limitations.

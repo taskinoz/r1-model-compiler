@@ -96,6 +96,44 @@ class HarnessTests(unittest.TestCase):
         self.assertFalse(harness.evaluate(self.events(),self.run,1,attachment='probe')['passed'])
         self.assertFalse(harness.evaluate(self.events(),self.run,1,physics=True)['passed'])
 
+    def test_noauth_client_retains_required_launcher_argument(self):
+        command=harness.launch_command(self.game,'mp_nexus')
+        self.assertIn('-noauth',command)
+        self.assertEqual(command[command.index('--authToken')+1],'r1c-local-noauth')
+        self.assertEqual(command[command.index('+sv_lan')+1],'1')
+
+    def test_dedicated_routes_to_server_without_client_token(self):
+        command=harness.launch_command(self.game,'mp_nexus',dedicated=True)
+        self.assertEqual(Path(command[0]).name,'tfods.exe')
+        self.assertIn('-dedicated',command)
+        self.assertNotIn('--authToken',command)
+        self.assertNotIn('-windowed',command)
+
+    def test_required_trace_rejects_miss(self):
+        text=self.events()+f'\n[R1C:{self.run}] TRACE 0 hit=false z=64'
+        self.assertFalse(harness.evaluate(text,self.run,1,required_traces=[0])['passed'])
+        self.assertTrue(harness.evaluate(text.replace('hit=false','hit=true'),self.run,1,required_traces=[0])['passed'])
+
+    def test_required_attachment_motion_rejects_stationary_samples(self):
+        lines=[f'[R1C:{self.run}] ATTACH 0 sample={i} pos=(vector : (1.000, 2.000, 3.000)) ang=(vector : (0,0,0))' for i in range(5)]
+        text=self.events()+'\n'+'\n'.join(lines)
+        self.assertFalse(harness.evaluate(text,self.run,1,attachment='probe',min_attachment_displacement=1)['passed'])
+        moved=text.replace('sample=4 pos=(vector : (1.000','sample=4 pos=(vector : (3.000')
+        result=harness.evaluate(moved,self.run,1,attachment='probe',min_attachment_displacement=1)
+        self.assertTrue(result['passed'],result)
+        self.assertEqual(result['attachment_displacements']['0'],2.)
+
+    def test_log_rotation_and_append_exclude_stale_evidence(self):
+        log=self.work/'runtime.log'
+        old=b'old run: SCRIPT ERROR\n'
+        log.write_bytes(old)
+        self.assertEqual(harness.read_runtime_log(log,len(old),old[:256]),'')
+        log.write_bytes(old+b'new appended event\n')
+        self.assertEqual(harness.read_runtime_log(log,len(old),old[:256]),'new appended event\n')
+        new=b'new truncated startup '+b'x'*100
+        log.write_bytes(new)
+        self.assertEqual(harness.read_runtime_log(log,len(old),old[:256]),new.decode())
+
     def test_prepare_only_is_explicitly_not_runtime_pass(self):
         model=self.compiled_model()
         report=self.work/'report.json'
