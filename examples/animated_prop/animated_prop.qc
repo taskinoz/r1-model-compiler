@@ -1,4 +1,4 @@
-$modelname "r2c_examples/animated_prop.mdl"
+$modelname "r1c_examples/animated_prop.mdl"
 $cdmaterials ""
 $body "body" "body.smd"
 $sequence "idle" "body.smd"

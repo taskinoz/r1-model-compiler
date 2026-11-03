@@ -1,5 +1,5 @@
 @echo off
-rem Builds r2studiomdl (Release, x64) with the newest Visual Studio that has the C++ tools.
+rem Builds r1studiomdl (Release, x64) with the newest Visual Studio that has the C++ tools.
 setlocal
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" (echo vswhere.exe not found: install Visual Studio 2022 with C++ tools & exit /b 1)

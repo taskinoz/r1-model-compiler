@@ -1,4 +1,4 @@
-$modelname "r2c_examples/physics_box.mdl"
+$modelname "r1c_examples/physics_box.mdl"
 $cdmaterials ""
 $body "body" "box.smd"
 $surfaceprop "metal"

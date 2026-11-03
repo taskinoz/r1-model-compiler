@@ -933,207 +933,62 @@ static std::vector<float> PositionScales(const BuildContext& ctx, const WAnim& a
 // Encodes frames [f0, f1] of an animation into one bone chain. constFrames: how many
 // leading frames decide whether a value is constant (a section's own frames, without
 // the frame it shares with the next section, as retail decides it).
-static std::vector<uint8_t> EncodeChain(const BuildContext& ctx, const WAnim& a, const std::vector<float>& posScales,
-                                        int f0, int f1, int constFrames = -1) {
-    const auto& bones = ctx.bones;
-    const int nb = static_cast<int>(bones.size());
-    bool delta = (a.flags & STUDIO_DELTA) != 0;
-    int nf = f1 - f0 + 1;
-    const int nfConst = constFrames > 0 ? std::min(constFrames, nf) : nf;
+static std::vector<uint8_t> EncodeChain(const BuildContext& ctx, const WAnim& a,
+                                        const std::vector<float>&, int f0, int f1, int = -1) {
     Buffer buf;
-    size_t prevRec = SIZE_MAX;
-    int written = 0;
-    for (int j = 0; j < nb; j++) {
-        if (bones[j].flags & BONE_ALWAYS_PROCEDURAL) continue;
-        if (a.weight[j] < 0.001f) continue;
-
-        // deltas from the bind pose (or raw values for delta animations)
-        std::vector<Vec3> dpos(nf);
-        std::vector<RadianEuler> drot(nf);
-        for (int n = 0; n < nf; n++) {
-            const BoneXf& b = a.sanim[f0 + n][j];
-            dpos[n] = PosDelta(ctx, a, j, f0 + n);
-            if (delta) {
-                drot[n] = b.rot;
-            } else {
-                for (int c = 0; c < 3; c++) drot[n][c] = b.rot[c] - bones[j].rot[c];
-            }
-            for (int c = 0; c < 3; c++) {
-                while (drot[n][c] >= kPi) drot[n][c] -= 2 * kPi;
-                while (drot[n][c] < -kPi) drot[n][c] += 2 * kPi;
-            }
-        }
-        float posscale = posScales[j];
-        std::vector<int16_t> pv[3], rv[3];
-        for (int c = 0; c < 3; c++) {
-            pv[c].resize(nf);
-            rv[c].resize(nf);
-            for (int n = 0; n < nf; n++) {
-                // Round rather than truncate: decoding and re-encoding an exact
-                // quantization level can otherwise lose one unit to float error.
-                // On long bone offsets a lost rotation unit is visibly amplified.
-                pv[c][n] = static_cast<int16_t>(std::clamp(std::round(dpos[n][c] / posscale), -32768.f, 32767.f));
-                rv[c][n] = static_cast<int16_t>(std::clamp(std::round(drot[n][c] / bones[j].rotscale[c]), -32768.f, 32767.f));
-            }
-        }
-        std::vector<int16_t> ps[3], rs[3];
-        bool posZero = true, rotZero = true, posConst = true, rotConst = true;
-        for (int c = 0; c < 3; c++) {
-            ps[c] = EncodeRLE(pv[c]);
-            rs[c] = EncodeRLE(rv[c]);
-            if (!StreamIsZero(ps[c])) posZero = false;
-            if (!StreamIsZero(rs[c])) rotZero = false;
-            for (int n = 1; n < nfConst; n++) {
-                if (pv[c][n] != pv[c][0]) posConst = false;
-                if (rv[c][n] != rv[c][0]) rotConst = false;
-            }
-        }
-        // Scale: raw (Vector48) unless it changes within the chain, then RLE values of
-        // (scale - bind scale) / scalescale (no bind scale for delta animations).
-        bool scaleIdentity = true, scaleConst = true;
-        for (int n = 0; n < nf; n++) {
-            const Vec3& s = a.sanim[f0 + n][j].scale;
-            const Vec3& s0 = a.sanim[f0][j].scale;
-            for (int c = 0; c < 3; c++) {
-                if (s[c] != (delta ? 1.f : bones[j].scale[c])) scaleIdentity = false;
-                if (std::fabs(s[c] - s0[c]) > 1e-6f) scaleConst = false;
-            }
-        }
-        std::vector<int16_t> ss[3];
-        bool animScale = !scaleIdentity && !scaleConst && nf > 1;
-        if (scaleConst || nf == 1) {
-            double rawError = 0, rleError = 0;
-            for (int c = 0; c < 3; c++) {
-                float value = a.sanim[f0][j].scale[c];
-                float raw = HalfToFloat(FloatToHalf(value));
-                float base = delta ? 0.f : bones[j].scale[c];
-                float level = std::clamp(std::round((value-base)*2048.f),-32768.f,32767.f);
-                float rle = base + level/2048.f;
-                rawError += static_cast<double>(raw-value)*(raw-value);
-                rleError += static_cast<double>(rle-value)*(rle-value);
-            }
-            // A constant non-unit bind scale may be exact on its RLE base but not
-            // representable as a half. Do not shrink the skinned mesh by rounding it.
-            if (rleError < rawError) animScale = true;
-        }
-        if (animScale) {
-            const float step = 1.f / 2048;
-            for (int c = 0; c < 3; c++) {
-                const float base = delta ? 0.f : bones[j].scale[c];
-                std::vector<int16_t> v(nf);
-                for (int n = 0; n < nf; n++) {
-                    float q = std::round((a.sanim[f0 + n][j].scale[c] - base) / step);
-                    if (q > 32767 || q < -32768)
-                        Warn("animation %s: bone %s scale %g is out of range", a.name.c_str(), bones[j].name.c_str(),
-                             a.sanim[f0 + n][j].scale[c]);
-                    v[n] = static_cast<int16_t>(std::clamp(q, -32768.f, 32767.f));
+    size_t previous = SIZE_MAX;
+    const bool delta = (a.flags & STUDIO_DELTA) != 0;
+    for (size_t j = 0; j < ctx.bones.size(); ++j) {
+        const auto& bone = ctx.bones[j];
+        if ((bone.flags & BONE_ALWAYS_PROCEDURAL) || a.weight[j] < .001f) continue;
+        std::vector<int16_t> channels[3][3];
+        bool present[3] = {};
+        for (int f = f0; f <= f1; ++f) {
+            Vec3 pos = PosDelta(ctx, a, static_cast<int>(j), f);
+            for (int c = 0; c < 3; ++c) {
+                float rot = a.sanim[f][j].rot[c] - (delta ? 0.f : bone.rot[c]);
+                while (rot >= kPi) rot -= 2*kPi;
+                while (rot < -kPi) rot += 2*kPi;
+                float scale = a.sanim[f][j].scale[c] - (delta ? 0.f : bone.scale[c]);
+                const float values[3] = {rot / bone.rotscale[c], pos[c] / bone.posscale[c], scale * 2048.f};
+                for (int g = 0; g < 3; ++g) {
+                    float v = std::round(values[g]);
+                    if (!std::isfinite(v) || v < -32768 || v > 32767)
+                        Fatal("animation %s: bone %s exceeds v52 channel range", a.name.c_str(), bone.name.c_str());
+                    channels[g][c].push_back(static_cast<int16_t>(v));
+                    present[g] = present[g] || v != 0;
                 }
-                ss[c] = EncodeRLE(v);
             }
         }
-        if (posZero && rotZero && scaleIdentity) continue;
-
-        size_t rec = buf.Reserve(32);
-        written++;
-        uint8_t flags = animScale ? 0x00 : 0x08;  // RAWSCALE unless the scale is animated
-        if (delta) flags |= 0x01;
-        buf.PatchAt<float>(rec + 0, posscale);
-        buf.PatchAt<uint8_t>(rec + 4, static_cast<uint8_t>(j));
-
-        // rotation
-        bool animRot = false;
-        if (rotZero) {
-            flags |= 0x10;  // NOROT: bind pose (or identity for delta)
-        } else if (rotConst || nf == 1) {
-            const BoneXf& b = a.sanim[f0][j];
-            Quat q = AngleQuaternion(b.rot);
-            if (!delta) q = QuaternionAlign(bones[j].qAlignment, q);
-            uint64_t packed = PackQuaternion64(q);
-            Quat decoded = UnpackQuaternion64(packed);
-            RadianEuler rleAngles;
-            for (int c = 0; c < 3; ++c)
-                rleAngles[c] = rv[c][0] * bones[j].rotscale[c] + (delta ? 0.f : bones[j].rot[c]);
-            Quat rle = AngleQuaternion(rleAngles);
-            auto error = [&](const Quat& value) {
-                double norm = std::sqrt(static_cast<double>(value.x)*value.x + static_cast<double>(value.y)*value.y +
-                                        static_cast<double>(value.z)*value.z + static_cast<double>(value.w)*value.w);
-                double dot = q.x*value.x + q.y*value.y + q.z*value.z + q.w*value.w;
-                double sign = dot < 0 ? -1. : 1.;
-                double dx = value.x/norm - sign*q.x, dy = value.y/norm - sign*q.y;
-                double dz = value.z/norm - sign*q.z, dw = value.w/norm - sign*q.w;
-                return dx*dx + dy*dy + dz*dz + dw*dw;
-            };
-            if (error(decoded) <= error(rle) + 1e-15) {
-                buf.PatchAt<uint64_t>(rec + 8, packed);
-                flags |= 0x04;
-            } else {
-                // Quaternion64 loses angular precision when its omitted W is
-                // almost zero. Constant RLE values retain the bone's precision.
-                animRot = true;
+        if (!present[0] && !present[1] && !present[2]) continue;
+        size_t rec = buf.Reserve(4);
+        buf.PatchAt<uint8_t>(rec, static_cast<uint8_t>(j));
+        uint8_t flags = (delta ? 0x10 : 0) | (present[0] ? 8 : 0) | (present[1] ? 4 : 0) | (present[2] ? 0x80 : 0);
+        buf.PatchAt<uint8_t>(rec + 1, flags);
+        size_t pointers[3] = {};
+        for (int g = 0; g < 3; ++g) if (present[g]) pointers[g] = buf.Reserve(6);
+        for (int g = 0; g < 3; ++g) if (present[g]) {
+            for (int c = 0; c < 3; ++c) {
+                auto stream = EncodeRLE(channels[g][c]);
+                if (StreamIsZero(stream)) continue;
+                size_t offset = buf.Tell() - pointers[g];
+                if (offset > 32767) Fatal("v52 animation channel too large; lower $sectionframes");
+                buf.PatchAt<int16_t>(pointers[g] + c*2, static_cast<int16_t>(offset));
+                for (int16_t value : stream) buf.I16(value);
             }
-        } else {
-            animRot = true;
         }
-        // position: raw Vector48 only when half precision is good enough.
-        // Retail always stores a position,
-        // even at the bind position (never all-null value pointers).
-        bool animPos = false;
-        if (posConst || posZero || nf == 1) {
-            Vec3 p = delta ? dpos[0] : a.sanim[f0][j].pos;
-            bool ok = true;
-            uint16_t h[3];
-            for (int c = 0; c < 3; c++) {
-                h[c] = FloatToHalf(p[c]);
-                if (std::fabs(HalfToFloat(h[c]) - p[c]) > 0.01f) ok = false;
-            }
-            if (ok) {
-                for (int c = 0; c < 3; c++) buf.PatchAt<uint16_t>(rec + 16 + c * 2, h[c]);
-                flags |= 0x02;
-            } else
-                animPos = true;
-        } else
-            animPos = true;
-        // raw scale (1,1,1 unless the bone holds a constant scale here)
-        if (!animScale)
-            for (int c = 0; c < 3; c++)
-                buf.PatchAt<uint16_t>(rec + 22 + c * 2, FloatToHalf(a.sanim[f0][j].scale[c]));
-
-        // animated value streams follow the record
-        // Retail never leaves all three value pointers null in an animated record (the
-        // game does not treat that as "bind pose"), so one explicit stream is kept.
-        auto emit = [&](size_t ptrPos, std::vector<int16_t>* streams) {
-            bool allZero = StreamIsZero(streams[0]) && StreamIsZero(streams[1]) && StreamIsZero(streams[2]);
-            for (int c = 0; c < 3; c++) {
-                if (StreamIsZero(streams[c]) && !(allZero && c == 0)) {
-                    buf.PatchAt<int16_t>(ptrPos + c * 2, 0);
-                    continue;
-                }
-                size_t at = buf.Tell();
-                long off = static_cast<long>(at - ptrPos);
-                if (off > 32767) Fatal("animation %s: bone %s data too large for one section (use $sectionframes)", a.name.c_str(), bones[j].name.c_str());
-                buf.PatchAt<int16_t>(ptrPos + c * 2, static_cast<int16_t>(off));
-                for (auto v : streams[c]) buf.I16(v);
-            }
-        };
-        if (animRot) emit(rec + 8, rs);
-        if (animPos) emit(rec + 16, ps);
-        if (animScale) emit(rec + 22, ss);
-        buf.PatchAt<uint8_t>(rec + 5, flags);
-        buf.Align(4);
-        if (prevRec != SIZE_MAX) buf.PatchI32(prevRec + 28, static_cast<int32_t>(rec - prevRec));
-        prevRec = rec;
+        buf.Align(2);
+        if (previous != SIZE_MAX) {
+            size_t next = rec - previous;
+            if (next > 32767) Fatal("v52 animation record too large; lower $sectionframes");
+            buf.PatchAt<int16_t>(previous + 2, static_cast<int16_t>(next));
+        }
+        previous = rec;
     }
-    if (written == 0) {
-        // empty chain: a single terminator record for bone 255
-        size_t rec = buf.Reserve(32);
-        buf.PatchAt<uint8_t>(rec + 4, 255);
-        buf.PatchAt<uint8_t>(rec + 5, 0);
-    }
+    if (previous == SIZE_MAX) { buf.U8(255); buf.U8(0); buf.I16(0); }
     return buf.Data();
 }
 
-// mstudioframemovement_t: float scale[4]; short offset[4]; then RLE streams for
-// x, y, z and yaw. Default scales match retail (128/32767 units, 180/32767 degrees).
 static std::vector<uint8_t> EncodeFrameMovement(const std::vector<Vec4>& fm, const Vec4* given = nullptr) {
     Buffer b;
     b.Reserve(24);
@@ -1495,6 +1350,16 @@ void EncodeAnimations(BuildContext& ctx) {
         // a stored scale (decompiled models) keeps the retail quantization grid
         for (auto& rs : ctx.qc.boneRotScales)
             if (IEquals(rs.first, bones[j].name)) bones[j].rotscale = rs.second;
+    }
+    // v52 position compression scales live in the bone, shared by every animation.
+    for (int j = 0; j < nb; ++j) {
+        for (int c = 0; c < 3; ++c) {
+            float extent = 128.f;
+            for (const auto& a : ctx.anims)
+                for (int f = 0; f < a.numFrames; ++f)
+                    extent = std::max(extent, std::fabs(PosDelta(ctx, a, j, f)[c]));
+            bones[j].posscale[c] = std::nextafter(extent / 32767.f, INFINITY);
+        }
     }
     int sf = ctx.qc.sectionFrames > 0 ? ctx.qc.sectionFrames : 30;
     int sfMin = ctx.qc.sectionFrames > 0 ? ctx.qc.sectionMinFrames : 120;

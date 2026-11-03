@@ -509,7 +509,7 @@ void BuildContext::FinalizeBones() {
         b.qAlignment = Quat();
         b.quat = AngleQuaternion(g.rot);  // retail stores it unaligned (w may be negative)
         b.rotscale = g.rotscale;
-        b.posscale = Vec3();  // v53 keeps position scales in the animation records
+        b.posscale = g.posscale;  // v52 shares position scales across animations
         b.scalescale = Vec3();
         b.boneToPose = g.boneToPose;
         b.poseToBone = Invert(g.boneToPose);

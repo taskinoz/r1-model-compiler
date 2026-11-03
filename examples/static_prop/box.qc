@@ -1,4 +1,4 @@
-$modelname "r2c_examples/box.mdl"
+$modelname "r1c_examples/box.mdl"
 $cdmaterials ""
 $body "body" "box.smd"
 $staticprop

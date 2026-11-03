@@ -43,7 +43,7 @@ jobs:
       - name: Test with uv
         shell: pwsh
         env:
-          R2C_COMPILER: build/r2studiomdl.exe
+          R1C_COMPILER: build/r1studiomdl.exe
         run: |
           uv run --locked python -m unittest discover -s tests -p "test_*.py"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -51,6 +51,6 @@ jobs:
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: r2studiomdl-win64
-          path: build/r2studiomdl.exe
+          name: r1studiomdl-win64
+          path: build/r1studiomdl.exe
           retention-days: 14

@@ -1,4 +1,4 @@
-"""Reader for Source/Titanfall 2 PHY data (IVP compact surfaces + keyvalue text).
+"""Reader for Source/Titanfall PHY data (IVP compact surfaces + keyvalue text).
 
 Used to study retail collision and to validate compiler output.
 """
@@ -100,11 +100,13 @@ def parse_phy(d, base=0):
 
 if __name__ == '__main__':
     sys.path.insert(0, __file__.rsplit('\\', 1)[0].rsplit('/', 1)[0])
-    import mdl53
-    d = open(sys.argv[1], 'rb').read()
+    from pathlib import Path
+    source = Path(sys.argv[1])
+    d = source.read_bytes()
     if d[:4] == b'IDST':
-        h = mdl53.Model(d).hdr
-        p = parse_phy(d[h['phyOffset']:h['phyOffset'] + h['phySize']])
+        if struct.unpack_from('<i', d, 4)[0] != 52:
+            raise ValueError('expected a native v52 model or standalone PHY')
+        p = parse_phy(source.with_suffix('.phy').read_bytes())
     else:
         p = parse_phy(d)
     for s in p['solids']:

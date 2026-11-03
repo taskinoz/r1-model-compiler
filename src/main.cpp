@@ -1,7 +1,7 @@
-// r2studiomdl: Titanfall 2 (MDL v53) model compiler.
+// r1studiomdl: Titanfall 1 (MDL v52) model compiler.
 //
 // Command line mirrors Valve's studiomdl so Crowbar can drive it:
-//   r2studiomdl [-game <dir>] [-nop4] [-verbose] [-quiet] [-o <out.mdl>] model.qc
+//   r1studiomdl [-game <dir>] [-nop4] [-verbose] [-quiet] [-o <out.mdl>] model.qc
 // Output goes to <game>/models/<$modelname>, or next to the QC when -game is absent.
 #include <chrono>
 #include <cstdio>
@@ -21,8 +21,8 @@ using namespace r2c;
 
 static void Usage() {
     std::printf(
-        "r2studiomdl - Titanfall 2 model compiler (MDL v53)\n"
-        "usage: r2studiomdl [options] <file.qc>\n"
+        "r1studiomdl - Titanfall 1 model compiler (MDL v52)\n"
+        "usage: r1studiomdl [options] <file.qc>\n"
         "  -game <dir>     game/mod directory; output is written to <dir>/models/<$modelname>\n"
         "  -o <file>       write the .mdl to this exact path\n"
         "  -outdir <dir>   write to <dir>/<$modelname>\n"
@@ -94,7 +94,41 @@ int main(int argc, char** argv) {
         std::ofstream f(out, std::ios::binary);
         if (!f) Fatal("could not write %s", out.u8string().c_str());
         f.write(reinterpret_cast<const char*>(mdl.data()), static_cast<std::streamsize>(mdl.size()));
+        if (!f) Fatal("failed writing %s", out.u8string().c_str());
         f.close();
+        int32_t checksum;
+        std::memcpy(&checksum, mdl.data() + 8, 4);
+        auto peer = [&](const char* extension, const std::vector<uint8_t>& bytes) {
+            auto path = out;
+            path.replace_extension(extension);
+            std::ofstream stream(path, std::ios::binary);
+            if (!stream) Fatal("could not write %s", path.u8string().c_str());
+            stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            if (!stream) Fatal("failed writing %s", path.u8string().c_str());
+        };
+        bool hasMesh = false;
+        for (const auto& bp : model.bodyParts)
+            for (const auto& md : bp.models) hasMesh = hasMesh || !md.meshes.empty();
+        auto removeStale = [&](const char* extension) {
+            auto path = out;
+            path.replace_extension(extension);
+            std::error_code error;
+            std::filesystem::remove(path, error);
+            if (error) Fatal("could not remove stale companion %s", path.u8string().c_str());
+        };
+        if (!hasMesh) { removeStale(".dx11.vtx"); removeStale(".vvd"); }
+        if (!hasMesh || !(model.hasVertexColor || model.hasUV2)) removeStale(".vvc");
+        if (model.physics.phy.empty()) removeStale(".phy");
+        if (hasMesh) {
+            peer(".dx11.vtx", WriteVTX(model, checksum));
+            peer(".vvd", WriteVVD(model, checksum));
+            if (model.hasVertexColor || model.hasUV2) peer(".vvc", WriteVVC(model, checksum));
+        }
+        if (!model.physics.phy.empty()) {
+            auto phy = model.physics.phy;
+            std::memcpy(phy.data() + 12, &checksum, 4);
+            peer(".phy", phy);
+        }
         int verts = 0, tris = 0;
         for (auto& bp : model.bodyParts)
             for (auto& md : bp.models) {
