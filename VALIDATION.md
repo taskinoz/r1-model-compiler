@@ -132,9 +132,13 @@ the authored box, so its drop distance is a functional control, not an equality 
 
 Updated R1Delta 3.0.4 was also tried. Direct Titanfall.exe explicitly requires its
 launcher and reports Failed to start the launcher when called without that parent.
-The configured r1delta.exe entry points and normal desktop launch were retried but
-did not expose a targetable game window or reach a map. No updated R1Delta runtime
-model pass is claimed.
+The normal desktop launch was subsequently observed to start after a delay, reaching
+the main menu and private lobby. This corrects the initial observation that no game
+window appeared. A uniquely owned addon under Titanfall/r1/addons was recognized
+and enabled by the updated client. It contains the compiled box, native error-model
+control and our server autorun probes; core game files are untouched. A local match
+has not yet reached those probes, so no R1Delta model-rendering pass is claimed.
+R1Delta menu rendering itself works; the GPU crash above belongs to TFORevive.
 
 Four more harness regressions cover mandatory no-auth launcher arguments, headless
 executable routing, required trace hits and required attachment motion; a fifth
