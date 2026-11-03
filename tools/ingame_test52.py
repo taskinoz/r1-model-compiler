@@ -107,7 +107,7 @@ function R1C_Run( player )
         for ( local i = 0; i < props.len(); i++ )
             R1C_Log( "PHYSICS " + i + " drop=" + (starts[i].z-props[i].GetOrigin().z) )
     R1C_Log( "DONE" )
-    if ( hasPlayer ) player.ClientCommand( "screenshot" )
+    if ( hasPlayer ) ClientCommand( player, "screenshot" )
     wait 2.0
     ServerCommand( "quit" )
 }

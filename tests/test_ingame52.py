@@ -76,6 +76,12 @@ class HarnessTests(unittest.TestCase):
             with self.subTest(path=path),self.assertRaises(ValueError): harness.game_path(path)
         with self.assertRaises(ValueError): harness.script(self.run,['models/a.mdl'],'idle";quit','',False)
 
+    def test_server_screenshot_uses_native_global_command(self):
+        for dedicated in (False, True):
+            source=harness.script(self.run,['models/test/box.mdl'],'idle','',False,dedicated)
+            self.assertIn('if ( hasPlayer ) ClientCommand( player, "screenshot" )',source)
+            self.assertNotIn('player.ClientCommand(',source)
+
     def test_complete_telemetry_passes(self):
         result=harness.evaluate(self.events(),self.run,1,paths=['models/test/box.mdl'])
         self.assertTrue(result['passed'],result)

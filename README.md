@@ -111,7 +111,9 @@ A smoke-test pass is not full render/animation/collision equivalence.
 **Current runtime status (4 November 2026):** native dedicated-server tests pass for
 the authored static, animated and physics examples. Client startup now gets past
 the launcher argument gate but crashes in the GPU driver before the model tests.
-Full client rendering and native retail roundtrips remain unvalidated.
+R1Delta reaches local matches: the compiled static box passes spawn/pose/collision
+probes, but remains invisible beside a visible native control. Client rendering
+and native retail roundtrips remain unvalidated.
 
 ### Direct no-auth launch and dedicated tests
 

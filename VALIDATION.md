@@ -143,3 +143,32 @@ R1Delta menu rendering itself works; the GPU crash above belongs to TFORevive.
 Four more harness regressions cover mandatory no-auth launcher arguments, headless
 executable routing, required trace hits and required attachment motion; a fifth
 covers log truncation/append freshness. Total 30 tests, CTest and locked uv pass.
+
+
+## R1Delta listen-server investigation (4 November 2026)
+
+The updated 3.0.4 client reached local mp_fracture matches. Its addon list was
+initially disabled (0); enabling the uniquely owned addon and restarting allowed
+its autorun probes to execute. The first callback ran during the dropship intro,
+so its high-altitude placement is not counted as a visual test.
+
+The listen-server run exposed a harness API error after DONE: server-side players
+do not have the client-only ClientCommand method. The generator now uses the
+native global ClientCommand(player, command), also used by the installed server
+scripts. A regression covers the generated server call. Total: 31 Python tests,
+locked uv, and both CTest groups pass. The compiler executable is unchanged.
+
+A corrected replay at the grounded player position logs both exact model paths,
+five pose samples per model, DONE and READY_FOR_VISUAL without the API error.
+The compiled box's model-bounded trace hits at 64.0313 inches. The preserved
+report is test-output/r1delta-grounded.json with its log, compiler, harness and
+reader hashes. It explicitly evaluates the static run with no requested sequence;
+the earlier failed startup is retained separately in r1delta-startup-console.txt.
+
+Rendering is NOT validated: after both props were moved close to the camera and
+above the terrain, the native ERROR control was visible but the compiled box was
+not. Correct server model identity and collision therefore do not establish a
+client-rendering pass. Four small diagnostic variants (material, header flag and
+winding) are staged in the owned addon for investigation; they are not fixes or
+passing evidence. A stable release remains blocked on this rendering fault and
+the other coverage gaps above. No comparison threshold was changed.
