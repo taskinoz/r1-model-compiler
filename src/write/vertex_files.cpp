@@ -274,7 +274,8 @@ VStripGroup BuildStripGroup(const CMesh& mesh, const std::vector<uint32_t>& lodI
             const CVertex& v = mesh.verts[mv];
             VVert vv;
             vv.origMeshVertID = static_cast<uint16_t>(mv);
-            vv.numBones = static_cast<uint8_t>(v.numBones);
+            // Native v52 static strips have no hardware bone palette.
+            vv.numBones = staticProp ? 0 : static_cast<uint8_t>(v.numBones);
             for (int b = 0; b < 3; b++) {
                 if (b < v.numBones) {
                     int g = v.bone[b];

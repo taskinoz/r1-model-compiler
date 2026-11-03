@@ -138,3 +138,42 @@ Recorded server results: static box hit at 64.0313 inches, animated probe moveme
 16.5427875 inches with a collision hit, compiled physics drop 135.535 inches, native
 physics control drop 121.785 inches. All three final runs exit cleanly and remove
 their temporary mods. See VALIDATION.md for source/report hashes and limitations.
+
+
+## R1Delta local-match harness
+
+`tools/ingame_test_r1delta.py` prepares an owned addon and a short console cfg for
+an already running R1Delta client. It uses the normal launcher and local match;
+it does not change authentication or core game files. Preparation enables only
+its unique addon entry while preserving other entries. A newly mounted addon
+may require one match restart.
+
+```powershell
+python tools\ingame_test_r1delta.py prepare --game "D:\Games\Titanfall" --session test-output\delta-session.json out\box.mdl=models/r1c_test/box.mdl
+# Run the printed exec r1c_<run-id> command in the game's local-match console.
+python tools\ingame_test_r1delta.py collect --session test-output\delta-session.json --report test-output\delta-report.json
+# After finishing the test (preferably after closing the game):
+python tools\ingame_test_r1delta.py cleanup --session test-output\delta-session.json
+```
+
+The cfg enables a unique console log, mounts addons, includes a run-specific
+script, and closes the console. The script waits for Playing and another twelve
+seconds before placing the models above nearby terrain, levels the camera, runs
+five pose/attachment samples and collision/optional physics probes, requests a
+screenshot, and leaves the scene open. `--sequence`, `--attachment`, and `--physics`
+are prepare options. Use multiple mappings for a native control beside the rebuild.
+Use a new session/model path for each compile to avoid engine model-cache reuse.
+
+`collect --timeout 90` watches only that run's log. `--log path/to/condump.txt`
+can evaluate an explicitly saved console dump instead. Reports include staged
+hashes, requested probes, exact model paths, and hashes of newly found screenshots.
+`server_passed` records the smoke probes; `visual_passed` and overall `passed`
+remain false because log events cannot establish visible geometry. Review the
+screenshots separately. The automatic screenshot and one-command flow still need
+live R1Delta verification; unit tests alone do not validate engine commands.
+
+Cleanup removes only the owned addon, its unchanged cfg and its addon-list entry;
+other addon changes made during testing survive. It preserves logs/screenshots.
+The cfg enables console logging for the test session: run `con_logfile ""` in the
+game console to stop it afterward. This attach harness does not claim unattended
+launcher-to-match automation.

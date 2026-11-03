@@ -155,6 +155,26 @@ class NativeV52(unittest.TestCase):
         with self.assertRaises(mdl52.FormatError):
             mdl52.Model(data)
 
+    def test_static_vtx_omits_hardware_skin_bones(self):
+        for static in (False, True):
+            p,_=self.compile(self.authored_qc('$staticprop\n' if static else ''))
+            data=bytearray(p.with_suffix('.dx11.vtx').read_bytes())
+            b=mdl52.Binary(data)
+            bp=b.integer(32)
+            model=bp+b.integer(bp+4)
+            lod=model+b.integer(model+4)
+            mesh=lod+b.integer(lod+4)
+            group=mesh+b.integer(mesh+4)
+            vertices=group+b.integer(group+4)
+            counts=[data[vertices+i*9+3] for i in range(b.integer(group))]
+            self.assertTrue(counts)
+            self.assertEqual(set(counts),{0} if static else {1})
+            if static:
+                data[vertices+3]=1
+                p.with_suffix('.dx11.vtx').write_bytes(data)
+                with self.assertRaisesRegex(mdl52.FormatError,'static VTX vertex'):
+                    mdl52.inspect(p)
+
     def test_corrupt_vtx_index_rejected(self):
         p,_=self.compile(self.authored_qc())
         path=p.with_suffix('.dx11.vtx')

@@ -172,3 +172,37 @@ client-rendering pass. Four small diagnostic variants (material, header flag and
 winding) are staged in the owned addon for investigation; they are not fixes or
 passing evidence. A stable release remains blocked on this rendering fault and
 the other coverage gaps above. No comparison threshold was changed.
+
+
+## Static VTX correction and reusable R1Delta harness (4 November 2026)
+
+The writer now emits zero hardware bone influences in static-prop VTX vertices,
+matching all 7,539,027 examined vertices across 3,097 Online static models (zero
+parse failures). VVD static unit weights are unchanged. The independent reader
+rejects the previous nonzero static VTX value; a regression compiles both static
+and dynamic meshes and rejects a deliberately corrupted static companion.
+
+Compiler SHA-256:
+`fdd9852c629b6caab26b930f90f6be7e8c333b961611481b8480a779ea6120a4`.
+Direct Python and locked-uv suites pass 36 tests; both CTest groups pass.
+For two diagnostic boxes, MDL/VVD files are byte-identical to the old outputs;
+only 24 VTX vertex bone-count bytes change from one to zero. Reports remain in
+`test-output/render-ab/fixed-comparison.json` and `fixed-runtime-stage.json`;
+the fixed scene's initial console evidence is `fixed-runtime-console.txt`.
+
+This change does not resolve the rendering failure. In the restarted local match,
+the native ERROR model was visible while the fixed comparison boxes were still
+not visible. The initial fixed run logged all four model paths and completed pose
+samples, but that telemetry does not prove rendered geometry. A later attempted
+console-script replay did not produce a fresh dump or recover the console, so it
+is not counted as another successful runtime run. The format correction is
+supported by native corpus evidence; client rendering remains a blocking gap.
+
+The new `tools/ingame_test_r1delta.py` provides prepare/collect/cleanup commands,
+unique addon/script/log IDs, companion hashes, delayed grounded placement,
+side-by-side probes, screenshot requests and ownership-checked cleanup. Four new
+regressions cover staging while preserving concurrent addon-list edits, refusing
+changed cfg removal, validating inputs before game mutation, and keeping visual
+validation false even when server telemetry passes. Preparation never counts as
+a runtime pass. The new cfg/bootstrap and screenshot collection are staged for
+live verification; they are not yet claimed to work unattended in R1Delta.

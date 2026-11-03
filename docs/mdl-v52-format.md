@@ -42,3 +42,12 @@ It emits internal RLE animations only. Native frame-encoded and external ANI
 reading, decompile/recompile validation, RUI representation and runtime testing
 remain future work. The inherited triangle-tree layout is version 2; its runtime
 behaviour on both v52 games still requires verification.
+
+
+Static-prop DX11 VTX vertex records store numBones=0 at byte +3, although their
+VVD records retain the static bone's unit weight. Static VTX strips also have no
+hardware bone palette. The initial inherited writer incorrectly emitted
+numBones=1 for these VTX vertices. All 7,539,027 examined VTX vertices in 3,097
+native Online static models store zero, with no parse failures. Non-static
+vertices retain their actual skin influence count. Runtime confirmation of the
+corrected writer is tracked in VALIDATION.md.

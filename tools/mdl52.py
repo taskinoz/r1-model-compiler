@@ -160,6 +160,8 @@ class Model(Binary):
                             nv,vo,ni,io,ns,so=vtx.read('6i',group)
                             for vertex in vtx.table(group+vo,nv,9):
                                 original=vtx.read('H',vertex+4)[0]
+                                if self.integer(0x98) & 0x10 and vtx.read('B',vertex+3)[0] != 0:
+                                    raise FormatError('static VTX vertex has hardware skin bones')
                                 if original>=mesh['vertices']:
                                     raise FormatError('VTX original mesh vertex out of range')
                             vtx.span(group+io,ni*2)
