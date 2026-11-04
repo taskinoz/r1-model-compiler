@@ -26,6 +26,18 @@ SERVER = r'''
 R1C_PATHS <- %MODELS%
 R1C_STARTED <- false
 function R1C_Log( message ) { printl( "[R1C:%RUN%] " + message ) }
+// Offline TFORevive sessions have no loadout data, so the core script returns a
+// null pilot settings file and the local player never spawns. Fall back to a
+// stock settings file only when the original lookup fails.
+::R1C_OriginalPilotSetFile <- GetPlayerPilotSetFile
+function GetPlayerPilotSetFile( self )
+{
+    local file = null
+    try { file = R1C_OriginalPilotSetFile( self ) } catch ( e ) {}
+    if ( file == null )
+        file = "pilot_male_fastest"
+    return file
+}
 function R1C_OnSpawn( player )
 {
     if ( R1C_STARTED ) return
@@ -35,6 +47,10 @@ function R1C_OnSpawn( player )
 function R1C_Run( player )
 {
     wait 2.0
+    // Classic MP spawns the player into a dropship; wait until they are free.
+    for ( local t = 0; IsValid( player ) && player.GetParent() != null && t < 60; t++ )
+        wait 1.0
+    if ( IsValid( player ) ) { R1C_Log( "PLAYER parent=" + player.GetParent() + " origin=" + player.GetOrigin() ); wait 2.0 }
     local props = []
     local starts = []
     local hasPlayer = IsValid( player )
@@ -55,6 +71,12 @@ function R1C_Run( player )
     {
         local model = R1C_PATHS[i]
         local pos = origin + fwd * (hasPlayer ? 180 : 0) + right * ( (i - (R1C_PATHS.len()-1)*0.5)*100 - (hasPlayer ? 70 : 0) )
+        if ( hasPlayer )
+        {
+            // Rest each prop on the ground below its slot so it is not buried in sloping terrain.
+            local ground = TraceLine( pos + Vector(0,0,96), pos - Vector(0,0,512), ignore, TRACE_MASK_SOLID, TRACE_COLLISION_GROUP_NONE )
+            if ( ground.fraction < 1.0 ) pos = ground.endPos
+        }
         local prop
         if ( %PHYSICS% )
         {
@@ -106,6 +128,15 @@ function R1C_Run( player )
     if ( %PHYSICS% )
         for ( local i = 0; i < props.len(); i++ )
             R1C_Log( "PHYSICS " + i + " drop=" + (starts[i].z-props[i].GetOrigin().z) )
+    if ( hasPlayer && IsValid( player ) )
+    {
+        // Level the camera on the props, then let the harness capture the window.
+        player.SetVelocity( Vector( 0, 0, 0 ) )
+        player.SetAngles( Vector( 8, yaw, 0 ) )
+        wait 1.5
+        R1C_Log( "VIEW 0" )
+        wait 2.5
+    }
     R1C_Log( "DONE" )
     if ( hasPlayer ) ClientCommand( player, "screenshot" )
     wait 2.0
@@ -138,6 +169,21 @@ def game_path(value):
     return value
 
 
+def internal_name(path):
+    """The model name stored in the MDL: the extended header's full name, else the
+    64-byte header name (which retail truncates to 62 characters)."""
+    data=Path(path).read_bytes()
+    if len(data)<0x198 or data[:4]!=b'IDST':
+        raise ValueError(f'{path}: not an MDL')
+    hdr2=int.from_bytes(data[0x190:0x194],'little')
+    if 0x198<=hdr2<=len(data)-0x18:
+        offset=hdr2+int.from_bytes(data[hdr2+0x14:hdr2+0x18],'little',signed=True)
+        if hdr2<offset<len(data) and b'\0' in data[offset:]:
+            name=data[offset:data.index(b'\0',offset)].decode('utf-8','replace')
+            if name: return name.replace('\\','/')
+    return data[12:76].split(b'\0',1)[0].decode('utf-8','replace').replace('\\','/')
+
+
 def parse_mount(value):
     source,sep,target=value.partition('=')
     if not sep:
@@ -145,7 +191,14 @@ def parse_mount(value):
     path=Path(source).resolve(strict=True)
     if path.suffix.lower()!='.mdl':
         raise ValueError('source must be a .mdl')
-    return path,game_path(target)
+    target=game_path(target)
+    # The client finds a model's VVD/VTX through the name stored in the MDL, not
+    # the path it was loaded from. A model mounted elsewhere still loads, animates
+    # and collides on the server, but the client draws nothing.
+    expected='models/'+internal_name(path)
+    if target.lower()!=expected.lower():
+        raise ValueError(f'{path.name} must be mounted at its $modelname path {expected}, not {target}')
+    return path,target
 
 
 def script(run_id,models,sequence,attachment,physics,dedicated=False):
@@ -279,6 +332,183 @@ def launch_command(game,map_name,dedicated=False):
     return command+['+sv_lan','1','+sv_cheats','1','+developer','1','+map',map_name]
 
 
+# The graphics driver sometimes crashes TFO while it starts: a stack overflow in
+# nvwgf2umx.dll (0xC00000FD) or an access violation in d3d11.dll (0xC0000005).
+STARTUP_CRASHES={0xC00000FD,0xC0000005}
+
+
+def should_retry(exit_code,text,run_id):
+    """A launch is retried only when it crashed before the test script logged
+    anything, so a crash while precaching the test models is never retried."""
+    return exit_code is not None and (exit_code & 0xffffffff) in STARTUP_CRASHES and f'[R1C:{run_id}]' not in text
+
+
+CRASH_HANDLERS=('crashpad_handler.exe','messagebox-win.exe')
+
+
+def owned_crash_handlers(entries,root,executables):
+    """Selects the crash handlers a crashed launch left behind.
+
+    entries are (pid, parent pid, image name, image path) tuples. A handler is
+    owned when it descends from the launched process (crashpad may start the
+    dialog) and runs from this install's Bin folder; others are left alone.
+    """
+    owned={}
+    tree={root}
+    changed=True
+    while changed:
+        changed=False
+        for pid,parent,name,path in entries:
+            if parent in tree and pid not in tree and name.casefold() in executables:
+                if path is not None and path.casefold()==executables[name.casefold()]:
+                    tree.add(pid)
+                    owned[pid]=name
+                    changed=True
+    return owned
+
+
+def close_crash_handlers(game,root,settle=8.0):
+    """Closes the TFORevive crash dialog and handler started by a crashed launch.
+    Returns the closed (pid, name) pairs."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Entry(ctypes.Structure):
+        _fields_=[('size',wintypes.DWORD),('usage',wintypes.DWORD),('pid',wintypes.DWORD),('heap',ctypes.c_size_t),
+                  ('module',wintypes.DWORD),('threads',wintypes.DWORD),('parent',wintypes.DWORD),
+                  ('priority',wintypes.LONG),('flags',wintypes.DWORD),('name',wintypes.WCHAR*260)]
+
+    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel.CreateToolhelp32Snapshot.restype=wintypes.HANDLE
+    kernel.CreateToolhelp32Snapshot.argtypes=[wintypes.DWORD,wintypes.DWORD]
+    kernel.Process32FirstW.argtypes=[wintypes.HANDLE,ctypes.POINTER(Entry)]
+    kernel.Process32NextW.argtypes=[wintypes.HANDLE,ctypes.POINTER(Entry)]
+    kernel.OpenProcess.restype=wintypes.HANDLE
+    kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD]
+    kernel.QueryFullProcessImageNameW.argtypes=[wintypes.HANDLE,wintypes.DWORD,wintypes.LPWSTR,ctypes.POINTER(wintypes.DWORD)]
+    kernel.TerminateProcess.argtypes=[wintypes.HANDLE,wintypes.UINT]
+    kernel.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD]
+    kernel.CloseHandle.argtypes=[wintypes.HANDLE]
+    executables={name:str((Path(game)/'Bin'/name).resolve()).casefold() for name in CRASH_HANDLERS}
+
+    def image(pid):
+        handle=kernel.OpenProcess(0x1000,False,pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle: return None
+        try:
+            buffer=ctypes.create_unicode_buffer(32768)
+            length=wintypes.DWORD(len(buffer))
+            return buffer.value if kernel.QueryFullProcessImageNameW(handle,0,buffer,ctypes.byref(length)) else None
+        finally:
+            kernel.CloseHandle(handle)
+
+    def snapshot():
+        handle=kernel.CreateToolhelp32Snapshot(2,0)
+        if handle==wintypes.HANDLE(-1).value: return []
+        rows=[]
+        try:
+            entry=Entry()
+            entry.size=ctypes.sizeof(entry)
+            found=kernel.Process32FirstW(handle,ctypes.byref(entry))
+            while found:
+                rows.append((entry.pid,entry.parent,entry.name))
+                found=kernel.Process32NextW(handle,ctypes.byref(entry))
+        finally:
+            kernel.CloseHandle(handle)
+        return [(pid,parent,name,image(pid) if name.casefold() in executables else None) for pid,parent,name in rows]
+
+    closed=[]
+    seen=set()
+    # The dialog appears a moment after the crash; keep looking briefly.
+    deadline=time.monotonic()+settle
+    while time.monotonic()<deadline:
+        for pid,name in owned_crash_handlers(snapshot(),root,executables).items():
+            if pid in seen: continue
+            seen.add(pid)
+            handle=kernel.OpenProcess(0x100001,False,pid)  # SYNCHRONIZE | PROCESS_TERMINATE
+            if handle:
+                try:
+                    if kernel.TerminateProcess(handle,1):
+                        kernel.WaitForSingleObject(handle,5000)
+                        closed.append((pid,name))
+                finally:
+                    kernel.CloseHandle(handle)
+        if any(name.casefold()=='messagebox-win.exe' for _,name in closed): break
+        time.sleep(0.5)
+    return closed
+
+
+def capture_window(pid,path):
+    """Saves the client area of the game's main window as a 24-bit BMP.
+
+    The DirectX window gives a blank PrintWindow image, so the window is raised
+    and the screen is read instead. Returns a description of the capture or None.
+    """
+    import ctypes
+    from ctypes import wintypes
+    user32=ctypes.WinDLL('user32',use_last_error=True)
+    gdi32=ctypes.WinDLL('gdi32',use_last_error=True)
+    user32.GetDC.restype=wintypes.HDC
+    user32.GetDC.argtypes=[wintypes.HWND]
+    user32.ReleaseDC.argtypes=[wintypes.HWND,wintypes.HDC]
+    gdi32.CreateCompatibleDC.restype=wintypes.HDC
+    gdi32.CreateCompatibleDC.argtypes=[wintypes.HDC]
+    gdi32.CreateCompatibleBitmap.restype=wintypes.HBITMAP
+    gdi32.CreateCompatibleBitmap.argtypes=[wintypes.HDC,ctypes.c_int,ctypes.c_int]
+    gdi32.SelectObject.restype=wintypes.HGDIOBJ
+    gdi32.SelectObject.argtypes=[wintypes.HDC,wintypes.HGDIOBJ]
+    gdi32.BitBlt.argtypes=[wintypes.HDC,ctypes.c_int,ctypes.c_int,ctypes.c_int,ctypes.c_int,wintypes.HDC,ctypes.c_int,ctypes.c_int,wintypes.DWORD]
+    gdi32.GetDIBits.argtypes=[wintypes.HDC,wintypes.HBITMAP,wintypes.UINT,wintypes.UINT,ctypes.c_void_p,ctypes.c_void_p,wintypes.UINT]
+    gdi32.DeleteObject.argtypes=[wintypes.HGDIOBJ]
+    gdi32.DeleteDC.argtypes=[wintypes.HDC]
+    windows=[]
+    @ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM)
+    def visit(hwnd,_):
+        owner=wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd,ctypes.byref(owner))
+        if owner.value==pid and user32.IsWindowVisible(hwnd):
+            rect=wintypes.RECT()
+            user32.GetClientRect(hwnd,ctypes.byref(rect))
+            name=ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd,name,256)
+            windows.append((hwnd,rect.right,rect.bottom,name.value))
+        return True
+    user32.EnumWindows(visit,0)
+    # Prefer the engine window over the launcher's web UI windows.
+    candidates=[w for w in windows if w[1]>=640 and w[2]>=360]
+    candidates.sort(key=lambda w:(not w[3].startswith(('Respawn','Valve')),-w[1]*w[2]))
+    if not candidates: return None
+    hwnd,width,height,name=candidates[0]
+    # Windows lets a background process raise a window only after a key event.
+    user32.keybd_event(0x12,0,0,0)
+    user32.keybd_event(0x12,0,2,0)
+    user32.ShowWindow(hwnd,9)
+    user32.SetWindowPos(hwnd,wintypes.HWND(-1),0,0,0,0,0x0003)
+    user32.SetForegroundWindow(hwnd)
+    time.sleep(0.6)
+    corner=wintypes.POINT(0,0)
+    user32.ClientToScreen(hwnd,ctypes.byref(corner))
+    screen=user32.GetDC(None)
+    memory=gdi32.CreateCompatibleDC(screen)
+    bitmap=gdi32.CreateCompatibleBitmap(screen,width,height)
+    old=gdi32.SelectObject(memory,bitmap)
+    try:
+        gdi32.BitBlt(memory,0,0,width,height,screen,corner.x,corner.y,0x00CC0020)
+        stride=(width*3+3)&~3
+        header=(ctypes.c_uint32*10)(40,width,height,1|(24<<16),0,stride*height,0,0,0,0)
+        pixels=ctypes.create_string_buffer(stride*height)
+        if not gdi32.GetDIBits(memory,bitmap,0,height,pixels,header,0):
+            return None
+    finally:
+        gdi32.SelectObject(memory,old)
+        gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(memory)
+        user32.ReleaseDC(None,screen)
+        user32.SetWindowPos(hwnd,wintypes.HWND(-2),0,0,0,0,0x0003)
+    data=bytes(header)+pixels.raw
+    Path(path).write_bytes(b'BM'+(14+len(data)).to_bytes(4,'little')+b'\0\0\0\0'+(54).to_bytes(4,'little')+data)
+    return {'window_class':name,'width':width,'height':height}
+
+
 def read_runtime_log(path,original_size,original_prefix):
     if not path.exists(): return ''
     data=path.read_bytes()
@@ -298,6 +528,7 @@ def main(argv=None):
     parser.add_argument('--physics',action='store_true')
     parser.add_argument('--dedicated',action='store_true',help='server-only loading/animation/physics checks; no rendering claim')
     parser.add_argument('--timeout',type=float,default=150)
+    parser.add_argument('--attempts',type=int,default=3,help='relaunch this many times when TFO crashes before the test script starts')
     parser.add_argument('--report',type=Path,required=True)
     parser.add_argument('--prepare-only',action='store_true',help='prepare and inspect temporary files without launching; not a runtime pass')
     parser.add_argument('--keep-mod',action='store_true',help='keep the owned temporary mod for debugging')
@@ -307,6 +538,7 @@ def main(argv=None):
     if args.game is None: parser.error('--game or TITANFALL_ONLINE_DIR is required')
     if not re.fullmatch('[A-Za-z0-9_]+',args.map): parser.error('invalid map')
     if not 1<=args.timeout<=600: parser.error('timeout must be 1..600 seconds')
+    if not 1<=args.attempts<=10: parser.error('attempts must be 1..10')
     if args.min_attachment_displacement<0 or not math.isfinite(args.min_attachment_displacement): parser.error('invalid displacement threshold')
     if args.min_attachment_displacement>0 and not args.attachment: parser.error('motion threshold requires --attachment')
     if any(i<0 or i>=len(args.models) for i in args.require_trace): parser.error('trace index outside model list')
@@ -336,9 +568,6 @@ def main(argv=None):
             report.update(status='prepared',issues=['prepare-only: game was not launched'])
             return 0
         logs=game/('Logs/tforevive_dedi.log' if args.dedicated else 'Logs/tforevive.log')
-        previous_log=logs.read_bytes() if logs.exists() else b''
-        offset=len(previous_log)
-        prefix=previous_log[:256]
         command=launch_command(game,args.map,args.dedicated)
         report['command']=command
         report['executable_sha256']=hashlib.sha256(Path(command[0]).read_bytes()).hexdigest()
@@ -348,45 +577,75 @@ def main(argv=None):
         for directory in screenshot_roots:
             if directory.exists():
                 screenshots.update({str(p):p.stat().st_mtime_ns for p in directory.glob('*') if p.is_file()})
-        with output.open('wb') as stream:
-            process=subprocess.Popen(command,cwd=game/'Bin' if args.cwd_bin else game,stdout=stream,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW if args.dedicated and os.name=='nt' else 0)
-            report.update(status='running',pid=process.pid)
-            deadline=time.monotonic()+args.timeout
-            text=''
-            while time.monotonic()<deadline:
+        report['attempts']=[]
+        report['window_captures']=[]
+        capture_issues=[]
+        for attempt in range(args.attempts):
+            previous_log=logs.read_bytes() if logs.exists() else b''
+            offset=len(previous_log)
+            prefix=previous_log[:256]
+            captured=set()
+            with output.open('ab') as stream:
+                process=subprocess.Popen(command,cwd=game/'Bin' if args.cwd_bin else game,stdout=stream,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW if args.dedicated and os.name=='nt' else 0)
+                report.update(status='running',pid=process.pid)
+                deadline=time.monotonic()+args.timeout
+                text=''
+                while time.monotonic()<deadline:
+                    if logs.exists():
+                        text=read_runtime_log(logs,offset,prefix)
+                        if 'SCRIPT ERROR' in text and 'r1c_model_test.nut' in text:
+                            break
+                        if not args.dedicated and os.name=='nt':
+                            for view in re.findall(rf'\[R1C:{run_id}\] VIEW (\d+)',text):
+                                if view not in captured:
+                                    captured.add(view)
+                                    path=args.report.with_name(f'{args.report.stem}.view{view}.bmp')
+                                    info=capture_window(process.pid,path)
+                                    if info:
+                                        report['window_captures'].append({'view':int(view),'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),**info})
+                                    else:
+                                        capture_issues.append(f'view {view}: no game window to capture')
+                        if f'[R1C:{run_id}] DONE' in text:
+                            time.sleep(3)
+                            break
+                    if process.poll() is not None: break
+                    time.sleep(0.5)
                 if logs.exists():
                     text=read_runtime_log(logs,offset,prefix)
-                    if 'SCRIPT ERROR' in text and 'r1c_model_test.nut' in text:
-                        break
-                    if f'[R1C:{run_id}] DONE' in text:
-                        time.sleep(3)
-                        break
-                if process.poll() is not None: break
-                time.sleep(1)
-            if logs.exists():
-                text=read_runtime_log(logs,offset,prefix)
-            result=evaluate(text,run_id,len(mounts),args.sequence,args.attachment,args.physics,[t for _,t in mounts],args.require_trace,args.min_attachment_displacement)
-            report.update(result,status='passed' if result['passed'] else 'failed')
-            # Keep only run-specific telemetry and redacted diagnostic context.
-            diagnostic=re.sub(r'(?i)(--authToken\s+|Bearer\s+)[^\s"\r\n]+',r'\1<redacted>',text)
-            args.report.with_suffix('.game.log').write_text(diagnostic,encoding='utf-8')
-            if process.poll() is None:
-                report['terminated_by_harness']=True
-                process.terminate()
-                try: process.wait(timeout=10)
-                except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=5)
-            report['exit_code']=process.returncode
-            if process.returncode not in (0,None) and not report.get('terminated_by_harness'):
-                report['issues'].append(f'game exited with code 0x{process.returncode & 0xffffffff:08X}')
-                report['passed']=False
-                report['status']='failed'
-            report['screenshots']=[]
-            for directory in screenshot_roots:
-                if directory.exists():
-                    for path in directory.glob('*'):
-                        if path.is_file() and path.suffix.lower() in ('.tga','.png','.jpg') and path.stat().st_mtime_ns!=screenshots.get(str(path)):
-                            report['screenshots'].append({'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest()})
-            return 0 if report['passed'] else 1
+                exit_code=process.poll()
+                report['attempts'].append({'pid':process.pid,'exit_code':exit_code})
+                if exit_code not in (None,0) and os.name=='nt':
+                    closed=close_crash_handlers(game,process.pid)
+                    report['attempts'][-1]['closed_crash_handlers']=[{'pid':pid,'name':name} for pid,name in closed]
+                if attempt+1<args.attempts and should_retry(exit_code,text,run_id):
+                    print(f'attempt {attempt+1}: TFO crashed at startup (0x{exit_code & 0xffffffff:08X}), retrying',flush=True)
+                    continue
+                break
+        result=evaluate(text,run_id,len(mounts),args.sequence,args.attachment,args.physics,[t for _,t in mounts],args.require_trace,args.min_attachment_displacement)
+        report.update(result,status='passed' if result['passed'] else 'failed')
+        if capture_issues:
+            report['issues'].extend(capture_issues)
+            report.update(passed=False,status='failed')
+        # Keep only run-specific telemetry and redacted diagnostic context.
+        diagnostic=re.sub(r'(?i)(--authToken\s+|Bearer\s+)[^\s"\r\n]+',r'\1<redacted>',text)
+        args.report.with_suffix('.game.log').write_text(diagnostic,encoding='utf-8')
+        if process.poll() is None:
+            report['terminated_by_harness']=True
+            process.terminate()
+            try: process.wait(timeout=10)
+            except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=5)
+        report['exit_code']=process.returncode
+        if process.returncode not in (0,None) and not report.get('terminated_by_harness'):
+            report['issues'].append(f'game exited with code 0x{process.returncode & 0xffffffff:08X}')
+            report['passed']=False
+            report['status']='failed'
+        report['screenshots']=[]
+        for directory in screenshot_roots:
+            if directory.exists():
+                for path in directory.glob('*'):
+                    if path.is_file() and path.suffix.lower() in ('.tga','.png','.jpg') and path.stat().st_mtime_ns!=screenshots.get(str(path)):
+                        report['screenshots'].append({'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest()})
+        return 0 if report['passed'] else 1
     except Exception as error:
         report.update(status='error',issues=[str(error)])
         return 1

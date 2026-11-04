@@ -51,3 +51,9 @@ numBones=1 for these VTX vertices. All 7,539,027 examined VTX vertices in 3,097
 native Online static models store zero, with no parse failures. Non-static
 vertices retain their actual skin influence count. Runtime confirmation of the
 corrected writer is tracked in VALIDATION.md.
+
+The Titanfall Online client loads a model's VVD and VTX through the name stored
+in the MDL (the extended header's name, mirrored at 0x0C), not the path the MDL
+was opened from. A model file renamed or moved after compiling still loads on the
+server, but the client finds no render data and draws nothing, without an error.
+Compile with the `$modelname` the model will be shipped under.

@@ -239,3 +239,73 @@ rendering test, not native compiler completion or an equivalence pass.
 Compiler hash remains fdd9852c629b6caab26b930f90f6be7e8c333b961611481b8480a779ea6120a4.
 The 36-test suite includes cfg developer-gate ordering, native IncludeFile loading,
 automatic screenshot/dump generation and strict run-boundary regression checks.
+
+
+## TFO client harness run (4 November 2026)
+
+Following MRVN-Radiant's `tools/respawn/tfo_harness.py`, `ingame_test52.py` now
+retries launches that crash in the GPU driver (0xC00000FD) before the test script
+initializes, supplies the stock `pilot_male_fastest` settings file when offline
+sessions return none, waits for the player to leave the dropship, rests each prop
+on the ground and captures the game window. The engine `screenshot` command left
+no file, so the window capture is the visual evidence.
+
+Run `test-output/tfo-client/f0-run4.json` (mp_nexus, `--cwd-bin`): the first
+attempt crashed with 0xC00000FD and the retry reached the probes. Both the fixed
+static box `render-ab/f0.mdl` and the native ERROR control spawn with the expected
+paths and five pose samples. The capture `f0-run4.view0.bmp` (SHA-256
+5bf1ad8168e9f3fffcbb2e704efc7f590f5eaf974ae1b2e5240c515aa99579ed) shows the
+ERROR control rendered and the compiled box absent. This matches the R1Delta
+result, so the invisibility is not specific to R1Delta. The box's
+model-bounded trace did not hit it on this run (end at its origin), so that run
+gives no collision evidence. The report fails; no threshold was changed.
+
+Two new regressions cover the pilot fallback/view ordering and the startup-crash
+retry rule. Direct and locked-uv suites pass 38 tests.
+
+Follow-up runs with fresh compiles of the examples (mp_nexus, TFO client):
+
+| Case | Server telemetry | Window capture |
+|---|---|---|
+| Static: examples/static_prop box beside native domestic/ashcan_standing (static-s2.json) | both spawn; traces hit the box at 64.0312 and the ashcan at 33.8387 | ashcan renders; compiled box absent (0250495a76a35792e1afd3230a875ba0b2fed62f7c40c75f61fe50370e1a8364) |
+| Animated: examples/animated_prop playing bend (anim-s1.json) | bend is sequence 1; probe moves up to 16.5427 inches; trace hit at 6.03125 | compiled model absent (ecbd109a2f536544c96859a9fea2d098aed920316c1156f391eaf7fca95df223) |
+
+No ERROR model replaces the compiled models; they are simply not drawn. Both
+rigid static and skinned dynamic models are affected, so the rendering fault
+is not specific to the static-prop path. A d3d11.dll access violation
+(0xC0000005) before any test marker is now also retried as a startup crash.
+
+
+## Rendering root cause and passing client runs (4 November 2026)
+
+The invisible-model failure was not in the compiler. The client finds a model's
+VVD and VTX through the name stored in the MDL (`$modelname`), not the path
+the MDL was loaded from. Every earlier client test mounted compiled models away
+from that name (for example `r1c_examples/box.mdl` at `models/r1c_test/box_s2.mdl`).
+The server still loaded, animated and collided with them, but the client had no
+mesh to draw. Native controls rendered because the game's archives hold their
+companions under their stored names. Field-by-field comparison with small native
+static props (domestic/sign_beer, haven/dress_01, foliage/ivy_patch_flood_01) found
+no header, bone, mesh, VVD or VTX difference that would stop drawing.
+
+Both harnesses now reject a mount that does not match the model's stored name.
+The earlier R1Delta and TFO "invisible" results above are superseded by this
+cause; the static VTX bone-count correction remains a valid format fix.
+
+| Case (TFO client, mp_nexus) | Telemetry | Window capture |
+|---|---|---|
+| examples/static_prop box and examples/animated_prop at their stored names (name-match.json) | traces hit at 64.0313 and 6.03125 | both drawn, textured (bad0c460e0985120e973fda26ec4e5c97d68fee2e9c08ae73420f81e44181920) |
+| examples/physics_prop beside native domestic/pizza_box (physics-s3.json) | drops 118.65 and 106.81 inches | both drawn, at rest on the ground (6e8dca0eb1bfef81f54188f7ca3f5dc19dfaded99c5ff10d66cab7c2bce07648) |
+
+Compiler SHA-256 unchanged: fdd9852c629b6caab26b930f90f6be7e8c333b961611481b8480a779ea6120a4. Python suites pass 39 tests. These are
+smoke tests of the authored examples, not retail roundtrips or full-frame
+animation equivalence.
+
+Crash-dialog cleanup: each crashed launch had left a "TFORevive Crash Handler"
+dialog open. The harness now closes the `messagebox-win.exe` and
+`crashpad_handler.exe` descended from its own crashed launch. In
+`test-output/tfo-client/cleanup-3.json`, three consecutive startup crashes
+(0xC00000FD) each closed one handler and one dialog, and the fourth attempt
+passed; no dialogs remained afterwards. A regression covers the ownership rules
+(other launches' and other installs' handlers are left alone). Python suites pass
+40 tests.

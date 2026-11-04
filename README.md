@@ -89,12 +89,18 @@ the installed `Bin/TFO.exe` on a local map, collects run-specific telemetry and
 removes its owned mod when finished. Close an existing TFO game before running it.
 
 ```powershell
-python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --sequence= --report test-output\tfo-static.json out\box.mdl=models/r1c_test/box.mdl
-python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --sequence bend --attachment probe --report test-output\tfo-animation.json out\animated.mdl=models/r1c_test/animated.mdl
-python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --physics --report test-output\tfo-physics.json out\physics.mdl=models/r1c_test/physics.mdl
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --sequence= --report test-output\tfo-static.json out\box.mdl=models/r1c_examples/box.mdl
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --sequence bend --attachment probe --report test-output\tfo-animation.json out\animated_prop.mdl=models/r1c_examples/animated_prop.mdl
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --physics --report test-output\tfo-physics.json out\physics_box.mdl=models/r1c_examples/physics_box.mdl
 ```
 
 Multiple model mappings allow a compiled model and native control side by side.
+**Mount each model at its `$modelname` path** (`models/` + the name stored in the
+MDL); both harnesses reject any other path. The client finds a model's VVD and VTX
+through that stored name, not the path the MDL was loaded from. A model mounted
+elsewhere still precaches, animates and collides on the server, but the client
+draws nothing and shows no error. Native controls are mounted at their own game
+paths.
 An empty `--sequence=` skips animation for static controls that have different
 sequence names. `--prepare-only` validates staging without launching; its report
 always has `passed: false`, and the mod is still cleaned up. `--keep-mod` retains
@@ -108,12 +114,37 @@ and optional attachment samples, and physics drop distances. New screenshots in
 known screenshot folders are listed with hashes; visually inspect these separately.
 A smoke-test pass is not full render/animation/collision equivalence.
 
-**Current runtime status (4 November 2026):** native dedicated-server tests pass for
-the authored static, animated and physics examples. Client startup now gets past
-the launcher argument gate but crashes in the GPU driver before the model tests.
-R1Delta reaches local matches: the compiled static box passes spawn/pose/collision
-probes, but remains invisible beside a visible native control. Client rendering
-and native retail roundtrips remain unvalidated.
+Client runs (no `--dedicated`) should use `--cwd-bin`. The harness handles three
+things the TFO client needs, learned from MRVN-Radiant's `tools/respawn/tfo_harness.py`:
+- **Startup crashes:** the GPU driver sometimes overflows the stack (0xC00000FD)
+  (0xC00000FD) or crashes in `d3d11.dll` (0xC0000005) while TFO starts. Such
+  launches are retried, up to `--attempts` (default 3), only if the test script
+  had logged nothing. After any crashed launch, the harness closes the
+  "TFORevive Crash Handler" dialog (`messagebox-win.exe`) and `crashpad_handler.exe`
+  that the launch started. Only handlers descended from that launch and running
+  from this install's `Bin` are closed; each attempt records what it closed.
+- **Offline spawning:** offline sessions have no loadout, so the core script's
+  pilot settings file is null and the player never spawns. The test script falls
+  back to the stock `pilot_male_fastest` only when the original lookup fails.
+- **Screenshots:** the engine `screenshot` command leaves no file. After the
+  player leaves the dropship, the script rests each prop on the ground, levels
+  the camera and logs `VIEW 0`. The harness then raises the game window and saves
+  its client area as `<report>.view0.bmp`, listed under `window_captures`.
+
+```powershell
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --cwd-bin --sequence= --timeout 300 --report test-output\tfo-client.json out\box.mdl=models/r1c_examples/box.mdl <native ashcan_standing.mdl>=models/domestic/ashcan_standing.mdl
+```
+
+Only one TFO instance can run, and other tools (such as MRVN-Radiant's map
+harness) share `Mods/` and `Logs/tforevive.log`; the harness refuses to start
+while `TFO.exe` or `tfods.exe` is running. Window captures are for visual review
+and are not counted as a pass.
+
+**Current runtime status (4 November 2026):** the authored static, animated and
+physics examples pass dedicated-server tests and full TFO client runs on mp_nexus,
+and render beside native controls in the captured game window. The earlier
+"invisible model" failure was the harness mounting models away from their
+`$modelname` path. Native retail roundtrips remain unvalidated.
 
 ### Direct no-auth launch and dedicated tests
 
@@ -123,9 +154,9 @@ keeps `-noauth`; it does not read or use account tokens. Dedicated mode launches
 the installed `Bin/tfods.exe` directly, with no client token or renderer.
 
 ```powershell
-python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --dedicated --sequence= --require-trace 0 --report test-output\tfo-static.json out\box.mdl=models/r1c_test/box.mdl
-python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --dedicated --sequence bend --attachment probe --min-attachment-displacement 1 --require-trace 0 --report test-output\tfo-animation.json out\animated.mdl=models/r1c_test/animated.mdl
-python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --dedicated --physics --report test-output\tfo-physics.json out\physics.mdl=models/r1c_test/physics.mdl
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --dedicated --sequence= --require-trace 0 --report test-output\tfo-static.json out\box.mdl=models/r1c_examples/box.mdl
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --dedicated --sequence bend --attachment probe --min-attachment-displacement 1 --require-trace 0 --report test-output\tfo-animation.json out\animated_prop.mdl=models/r1c_examples/animated_prop.mdl
+python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --dedicated --physics --report test-output\tfo-physics.json out\physics_box.mdl=models/r1c_examples/physics_box.mdl
 ```
 
 The headless script waits for map entities to load and uses a real spawn point.
@@ -149,7 +180,7 @@ its unique addon entry while preserving other entries. A newly mounted addon
 may require one match restart.
 
 ```powershell
-python tools\ingame_test_r1delta.py prepare --game "D:\Games\Titanfall" --session test-output\delta-session.json out\box.mdl=models/r1c_test/box.mdl
+python tools\ingame_test_r1delta.py prepare --game "D:\Games\Titanfall" --session test-output\delta-session.json out\box.mdl=models/r1c_examples/box.mdl
 # Run the printed exec r1c_<run-id> command in the game's local-match console.
 python tools\ingame_test_r1delta.py collect --session test-output\delta-session.json --report test-output\delta-report.json
 # After finishing the test (preferably after closing the game):
@@ -164,7 +195,7 @@ seconds before placing the models above nearby terrain, levels the camera, runs
 five pose/attachment samples and collision/optional physics probes, requests a
 screenshot, and leaves the scene open. `--sequence`, `--attachment`, and `--physics`
 are prepare options. Use multiple mappings for a native control beside the rebuild.
-Use a new session/model path for each compile to avoid engine model-cache reuse.
+Use a new session and a new `$modelname` for each compile to avoid engine model-cache reuse.
 
 `collect --timeout 90` watches fresh native console dumps for that run's BEGIN
 boundary. The listen-server script exports the dump automatically when finished.
@@ -175,7 +206,8 @@ hashes, requested probes, exact model paths, and hashes of newly found screensho
 remain false because log events cannot establish visible geometry. Review the
 screenshots separately. The one-command scene, automatic screenshot, console dump
 and collection were
-verified in a live R1Delta local match. The compiled box still fails visual review.
+verified in a live R1Delta local match. Those R1Delta runs mounted the box away from
+its `$modelname` path, which is why it was not drawn (see below).
 
 Cleanup removes only the owned addon, its unchanged cfg and its addon-list entry;
 other addon changes made during testing survive. It preserves logs/screenshots.

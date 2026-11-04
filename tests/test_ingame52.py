@@ -82,6 +82,23 @@ class HarnessTests(unittest.TestCase):
             self.assertIn('if ( hasPlayer ) ClientCommand( player, "screenshot" )',source)
             self.assertNotIn('player.ClientCommand(',source)
 
+    def test_offline_client_gets_pilot_fallback_and_view_event(self):
+        source=harness.script(self.run,['models/test/box.mdl'],'idle','',False)
+        self.assertIn('::R1C_OriginalPilotSetFile <- GetPlayerPilotSetFile',source)
+        self.assertIn('file = "pilot_male_fastest"',source)
+        self.assertIn('player.GetParent() != null',source)
+        self.assertLess(source.index('R1C_Log( "VIEW 0" )'),source.index('R1C_Log( "DONE" )'))
+
+    def test_only_startup_driver_crashes_are_retried(self):
+        self.assertTrue(harness.should_retry(-1073741571,'',self.run))  # 0xC00000FD as a signed code
+        self.assertTrue(harness.should_retry(0xC00000FD,'',self.run))
+        self.assertFalse(harness.should_retry(0xC00000FD,f'[R1C:{self.run}] INIT',self.run))
+        self.assertFalse(harness.should_retry(0xC0000409,'',self.run))
+        self.assertTrue(harness.should_retry(0xC0000005,'',self.run))
+        self.assertFalse(harness.should_retry(0xC0000005,f'[R1C:{self.run}] PRECACHE models/a.mdl',self.run))
+        self.assertFalse(harness.should_retry(0,'',self.run))
+        self.assertFalse(harness.should_retry(None,'',self.run))
+
     def test_complete_telemetry_passes(self):
         result=harness.evaluate(self.events(),self.run,1,paths=['models/test/box.mdl'])
         self.assertTrue(result['passed'],result)
@@ -140,10 +157,30 @@ class HarnessTests(unittest.TestCase):
         log.write_bytes(new)
         self.assertEqual(harness.read_runtime_log(log,len(old),old[:256]),new.decode())
 
+    def test_only_owned_crash_handlers_are_closed(self):
+        exe={n:f'd:/tfo/bin/{n}' for n in harness.CRASH_HANDLERS}
+        entries=[
+            (20,10,'messagebox-win.exe','D:/TFO/Bin/messagebox-win.exe'),   # dialog of the crashed launch
+            (21,10,'crashpad_handler.exe','D:/TFO/Bin/crashpad_handler.exe'),
+            (22,21,'messagebox-win.exe','D:/TFO/Bin/messagebox-win.exe'),   # launched by that handler
+            (30,99,'messagebox-win.exe','D:/TFO/Bin/messagebox-win.exe'),   # another launch's dialog
+            (31,10,'messagebox-win.exe','E:/Other/Bin/messagebox-win.exe'), # another install
+            (32,10,'notepad.exe',None),
+        ]
+        self.assertEqual(harness.owned_crash_handlers(entries,10,exe),
+                         {20:'messagebox-win.exe',21:'crashpad_handler.exe',22:'messagebox-win.exe'})
+
+    def test_mount_must_match_internal_model_name(self):
+        model=self.compiled_model()
+        self.assertEqual(harness.internal_name(model),'r1c_examples/box.mdl')
+        self.assertEqual(harness.parse_mount(f'{model}=models/R1C_Examples/box.mdl')[1],'models/R1C_Examples/box.mdl')
+        with self.assertRaisesRegex(ValueError,r'\$modelname path models/r1c_examples/box.mdl'):
+            harness.parse_mount(f'{model}=models/test/box.mdl')
+
     def test_prepare_only_is_explicitly_not_runtime_pass(self):
         model=self.compiled_model()
         report=self.work/'report.json'
-        result=harness.main(['--game',str(self.game),'--prepare-only','--report',str(report),f'{model}=models/test/box.mdl'])
+        result=harness.main(['--game',str(self.game),'--prepare-only','--report',str(report),f'{model}=models/r1c_examples/box.mdl'])
         self.assertEqual(result,0)
         data=json.loads(report.read_text())
         self.assertFalse(data['passed'])
