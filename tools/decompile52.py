@@ -105,18 +105,27 @@ def unpack_q64(v):
     x = ((v & 0x1FFFFF) - 1048576) * (1 / 1048576.5)
     y = (((v >> 21) & 0x1FFFFF) - 1048576) * (1 / 1048576.5)
     z = (((v >> 42) & 0x1FFFFF) - 1048576) * (1 / 1048576.5)
-    d = 1 - (x * x + y * y + z * z)
-    w = math.sqrt(d) if d > 0 else 0.0
-    if v >> 63:
-        w = -w
-    return (x, y, z, w)
+    return _unit_quaternion(x, y, z, v >> 63)
+
+
+def _unit_quaternion(x, y, z, negative_w):
+    """A compressed quaternion's w from x, y and z. Some retail values have
+    x^2 + y^2 + z^2 > 1; they are normalized (w = 0) rather than left over-length."""
+    length = x * x + y * y + z * z
+    if length > 1:
+        k = 1 / math.sqrt(length)
+        return (x * k, y * k, z * k, 0.0)
+    w = math.sqrt(1 - length)
+    return (x, y, z, -w if negative_w else w)
 
 
 def half(h):
     return struct.unpack('<e', struct.pack('<H', h))[0]
 
 
-ROT_M90 = angle_matrix((0, 0, -math.pi / 2))  # inverse of studiomdl's default rotation
+# inverse of studiomdl's default rotation, exact: cos(-pi/2) is 6e-17 in floating
+# point, which would leave tiny non-zero components on exact (half-precision) values
+ROT_M90 = [[0.0, 1.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
 
 
 # ---------------------------------------------------------------- anim decode
@@ -142,8 +151,7 @@ def unpack_q48(d, o):
     x = (a - 32768) * (1 / 32768.0)
     y = (b - 32768) * (1 / 32768.0)
     z = ((c & 0x7FFF) - 16384) * (1 / 16384.0)
-    w = math.sqrt(max(0.0, 1 - x * x - y * y - z * z))
-    return (x, y, z, -w if c >> 15 else w)
+    return _unit_quaternion(x, y, z, c >> 15)
 
 
 def unpack_v48(d, o):
@@ -1052,8 +1060,8 @@ def decompile(path, outdir):
         parent = bones[b['parent']]['name'] if b['parent'] >= 0 else ''
         ang = b['rot']
         qc.append('$definebone "%s" "%s" %s %s %s %s %s %s 0 0 0 0 0 0' % (
-            b['name'], parent, fmt(b['pos'][0]), fmt(b['pos'][1]), fmt(b['pos'][2]),
-            fmt(math.degrees(ang[1])), fmt(math.degrees(ang[2])), fmt(math.degrees(ang[0]))))
+            b['name'], parent, *('%.9g' % v for v in (b['pos'][0], b['pos'][1], b['pos'][2],  # full precision bind pose
+                                                     math.degrees(ang[1]), math.degrees(ang[2]), math.degrees(ang[0])))))
         if any(v != 1 for v in b['scale']):
             qc[-1] += ' scale ' + ' '.join('%.9g' % v for v in b['scale'])
     # bones listed for bone merge (the flag cannot be derived; retail sets it per model)
@@ -1067,15 +1075,22 @@ def decompile(path, outdir):
     # Only bones that retail stores as RLE animated rotations use their scale; frame-
     # encoded animations store quaternions, and their bones' scales can be unusable.
     if not static and h['numlocalanim']:
-        rle_rotated = set()
+        rle_rotated, rle_moved = set(), set()
         for ai in range(h['numlocalanim']):
             if anims.desc(ai)[1]['flags'] & STUDIO_FRAMEANIM:
                 continue
             for buf, start in anims.sections(ai):
-                rle_rotated.update(bone for _, bone, flags in rle_records(buf, start, len(bones)) if flags & 0x08)
+                for _, bone, flags in rle_records(buf, start, len(bones)):
+                    if flags & 0x08:
+                        rle_rotated.add(bone)
+                    if flags & 0x04:
+                        rle_moved.add(bone)
         for bi, b in enumerate(bones):
             if bi in rle_rotated:
                 qc.append('$bonerotscale "%s" %s' % (b['name'], ' '.join('%.9g' % v for v in b['rotscale'])))
+            # v52 position steps are per bone; retail's grid keeps animated positions exact
+            if bi in rle_moved:
+                qc.append('$boneposscale "%s" %s' % (b['name'], ' '.join('%.9g' % v for v in b['posscale'])))
 
     vtx = mdl52layout.parse_vtx(vtx_data, 0) if vtx_data else None
     sz = mdl52layout.size(mdl52layout.BODYPART_FIELDS)
@@ -1389,6 +1404,8 @@ def decompile(path, outdir):
             opts.append('fmtrack "%s"' % fm_file)
         if delta:
             opts.append('delta')  # frames are raw local deltas
+        if a['flags'] & STUDIO_FRAMEANIM:
+            opts.append('frameanim')  # retail stored it frame-encoded
         if a['flags'] & 0x20000:
             opts.append('hasscale')
         elif scales is not None and any(abs(v - 1) > 1e-4 for fr in scales for s in fr for v in s):

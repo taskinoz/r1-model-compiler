@@ -202,6 +202,7 @@ struct QcAnimation {
     int loopRestart = 0;
     bool fudgeLoop = false;
     bool noAutoIK = false;
+    bool frameAnim = false;  // "frameanim" (r1c): frame-encoded data (descriptor flag 0x40) instead of RLE
     bool noScaleFlag = false;  // "noscaleflag" (r1c): never set HAS_SCALE automatically
     bool rawDelta = false;  // "delta": source frames are local deltas (STUDIO_DELTA on the animation)
     // "posscale bone s" (r2c extension): the stored position step for a bone, which a
@@ -447,6 +448,7 @@ struct QcModelDef {
     std::vector<std::string> nodes;  // $node (r2c extension): node names in table order
     int localNodeUnk = 0;            // $localnodeunk (r2c extension): header field 0x108
     std::vector<std::pair<std::string, Vec3>> boneRotScales;  // $bonerotscale (r2c extension)
+    std::vector<std::pair<std::string, Vec3>> bonePosScales;  // $boneposscale (r1c extension)
     float headerMass = -1;  // top-level $mass (r2c extension): header mass of a model without physics
     bool illumSet = false;
     Vec3 illumPosition;

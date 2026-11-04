@@ -8,7 +8,7 @@ source frontend and build pipeline but writing the native v52 layouts.
 Titanfall Online's locally inspected models also use v52. They are useful format
 references, but matching that version does not establish runtime compatibility.
 The authored examples pass **TFORevive dedicated-server and client** runs, and
-**3,486 of 3,514 retail Titanfall Online models round-trip** through the v52
+**3,509 of 3,514 retail Titanfall Online models round-trip** through the v52
 decompiler and compiler with every compared field matching.
 See [VALIDATION.md](VALIDATION.md) for the precise evidence and limitations.
 
@@ -37,8 +37,10 @@ The initial implementation includes:
 - Static triangle collision, authored rigid physics and jointed PHY output.
 - Attachments, hitboxes, sequences, includes and native IK-rule serialization.
 
-The native animation writer currently emits RLE, not frame encoding or external
-`.ani` blocks. The initial encoder supports at most 255 bones. `$uipanel` and bone
+The animation writer emits RLE by default, storing channels that are constant over a
+section raw (Quaternion64 rotations, Vector48 positions) as retail does. The
+`frameanim` animation option writes retail's frame-encoded format instead. External
+`.ani` blocks are not written. The initial encoder supports at most 255 bones. `$uipanel` and bone
 followers are rejected because their v52 representation is not implemented.
 Inherited QC options are not all individually validated for TF1.
 
@@ -71,9 +73,10 @@ volume, attachments, hitbox sets and procedural bones. It checkpoints
 
 The decompiler writes these r1c QC extensions where retail cannot be derived:
 `$singleframeflag` (sequence flag 0x80000 on single-frame sequences, set per model
-by some retail builds), `$texture "name"` (material entries no mesh uses) and the
-animation option `noscaleflag` (scaled bones without HAS_SCALE). Rebuilt animations
-are always RLE; retail frame-encoded data is compared by decoded pose.
+by some retail builds), `$texture "name"` (material entries no mesh uses),
+`$boneposscale` (a bone's retail position step, kept when the data fits it) and the
+animation options `frameanim` (frame-encoded, as retail stored it) and `noscaleflag`
+(scaled bones without HAS_SCALE).
 
 ## Tests and inspection
 

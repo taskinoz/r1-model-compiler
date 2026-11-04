@@ -125,3 +125,14 @@ store it that way. The compiler wrote it header-relative until 5 November 2026.
 Some retail companions belong to another build: `p_f_skits.dx11.vtx` has one body
 part and two models while its MDL has none, and its checksum differs. Tools must
 ignore a companion whose checksum (VVD/VVC +8, VTX +16, PHY +12) does not match.
+
+
+## Writing animations
+
+Retail RLE stores a channel raw when it is constant over a section's own frames:
+rotation as Quaternion64 (0x20), position as Vector48 (0x01). Compressed quaternions
+derive w from x, y and z, so near 180 degrees (small w) the raw form is imprecise;
+those stay on the animated grid. A component of exactly +1 cannot be packed (it is
+one step past the top code) while -1 can; pack -q instead. Quaternion64 also cannot
+represent +-1 exactly (its divisor is 1048576.5), so a component of magnitude 1
+decodes with w of about 0.001. Some retail Quaternion48 values exceed unit length.

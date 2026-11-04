@@ -348,3 +348,39 @@ Format and compiler findings from this work (details in docs/mdl-v52-format.md):
   (checksum mismatch) and ignored.
 
 Tests: 49 Python tests (including tests/test_decompile52.py) and both CTest groups pass.
+
+
+## Frame-encoded animation writer and exact retail animation round trip (5 November 2026)
+
+The compiler now writes retail's frame-encoded animation format (`frameanim`), and
+its RLE writer stores section-constant channels raw as retail does. Final run
+`test-output/rt52-full5`, compiler SHA-256 `e449d2e91cd3f8a802c28bf1f4dbcaa91d57f6cf9f82c15788b3e8ef8219f8ba`:
+
+**3,509 / 3,514 identical in the compared fields** (previously 3,486). All 23
+animation-position differences are resolved; no previously passing model fails.
+Remaining: 3 flat retail collision hulls, 1 boneless include-only model, 1
+duplicated texture name (see the table above).
+
+Causes found and fixed while closing the animation differences:
+
+- Retail cinematic paths store section-constant rotations as raw Quaternion64 and
+  positions as raw Vector48; the RLE writer now does the same when a channel is
+  constant over a section's own frames, not the bind pose, exact at half precision
+  (positions) and accurate as a Quaternion64 (rotations near 180 degrees are not:
+  their derived w loses precision, and retail keeps them on the animated grid).
+- `$boneposscale` keeps a bone's retail position step (v52 shares one per bone).
+  Stored rotation and position steps are kept when every quantized value fits,
+  checking each side of the asymmetric -32768..32767 range and ignoring raw
+  sections and frame-encoded animations.
+- Quaternion48/64 packing overflowed for a component of +1 (for example a roll of
+  exactly pi became 0.0156 rad off); the packer now uses -q, which is exact.
+- Bind-pose tests compare quaternion components (dot products cannot resolve this
+  in float32) and allow for QC angles passing through degrees; `$definebone` is
+  decompiled at full precision.
+- Float sine/cosine of right angles (about 4e-8) made exact positions inexact after
+  the 90 degree root rotation; both the compiler and decompiler now use exact values.
+- Some retail Quaternion48 values have x^2 + y^2 + z^2 > 1; both decoders normalize
+  them rather than produce a non-orthonormal matrix.
+
+The independent reader (`tools/mdl52.py`) now decodes frame-encoded blocks and raw
+RLE channels itself. Tests: 53 Python tests and both CTest groups pass.

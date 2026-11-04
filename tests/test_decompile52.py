@@ -130,6 +130,81 @@ class DecompileV52(unittest.TestCase):
         pose = dc.decode_anim(model.data, model, bones, 1, [2], with_scale=True)[2][0]
         self.assertAlmostEqual(pose[1][2][0], 1000., delta=bones[1]['scalescale'][0])
 
+    def anim_smd(self, name, frames):
+        """frames: list of (child position, child roll/pitch/yaw radians)."""
+        lines = ['version 1', 'nodes', '0 "root" -1', '1 "child" 0', 'end', 'skeleton']
+        for t, (pos, rot) in enumerate(frames):
+            lines += ['time %d' % t, '0 0 0 0 0 0 0', '1 %s %s' % (' '.join('%.9g' % v for v in pos), ' '.join('%.9g' % v for v in rot))]
+        (self.work/name).write_text('\n'.join(lines + ['end']) + '\n')
+
+    def child_track(self, path, anim):
+        model = mdl52layout.Model(path.read_bytes())
+        bones = model.bones()
+        frames = dc.decode_anim(model.data, model, bones, anim)[2]
+        independent = mdl52.Model(path.read_bytes())
+        return model, [f[1] for f in frames], [independent.decode_frame(anim, f)[1] for f in range(len(frames))]
+
+    def test_frame_encoded_output_matches_source(self):
+        self.ref_smd()
+        # rotations stay below ~115 degrees: near 180 the derived w of Quaternion48 is coarse
+        frames = [((1 + t * 0.37, 2000.5 + t * 13.25, -3.0), (0.05 * t, -0.025 * t, 0.2)) for t in range(40)]
+        self.anim_smd('walk.smd', frames)
+        qc = self.work/'walk.qc'
+        qc.write_text('$modelname "walk.mdl"\n$body body "ref.smd"\n$sequence idle "ref.smd"\n'
+                      '$animation walk "walk.smd" frameanim\n$sequence walk walk\n')
+        path = self.compile(qc, self.work/'walk.mdl')
+        model, track, independent = self.child_track(path, 1)
+        o = model.hdr['localanimindex'] + 0x64
+        self.assertTrue(struct.unpack_from('<i', model.data, o + 12)[0] & 0x40)
+        for (pos, rot), (got_pos, got_rot), other in zip(frames, track, independent):
+            want = struct.unpack('<3f', struct.pack('<3f', *pos))  # inexact at half precision: stored as floats
+            self.assertEqual(got_pos, want)
+            self.assertLess(max(abs(a - b) for row_a, row_b in zip(got_rot, dc.angle_matrix(rot)) for a, b in zip(row_a, row_b)), 5e-4)  # Quaternion48 steps: 1/32768 (x, y), 1/16384 (z)
+            self.assertEqual(other['pos'], want)
+
+    def test_half_turn_roll_is_exact(self):
+        # A roll of pi is the quaternion (1, 0, 0, 0); +1 overflows the packed formats
+        # unless the sign is flipped.
+        self.ref_smd()
+        frames = [((1., 0., 0.), (math.pi, 0., 0.))] * 3 + [((1., 0., 0.), (0.5, 0., 0.))] * 3
+        self.anim_smd('roll.smd', frames)
+        qc = self.work/'roll.qc'
+        qc.write_text('$modelname "roll.mdl"\n$body body "ref.smd"\n$sequence idle "ref.smd"\n'
+                      '$animation rle "roll.smd"\n$animation frames "roll.smd" frameanim\n$sequence rle rle\n$sequence frames frames\n')
+        path = self.compile(qc, self.work/'roll.mdl')
+        for anim in (1, 2):
+            with self.subTest(anim=anim):
+                _, track, _ = self.child_track(path, anim)
+                self.assertLess(max(abs(a - b) for row_a, row_b in zip(track[0][1], dc.angle_matrix((math.pi, 0, 0)))
+                                    for a, b in zip(row_a, row_b)), 1e-4)
+
+    def test_constant_channels_are_stored_raw(self):
+        self.ref_smd()
+        frames = [((5000.0, -2048.0, 0.25), (0.3, 0.2, 0.1))] * 8
+        self.anim_smd('hold.smd', frames)
+        qc = self.work/'hold.qc'
+        qc.write_text('$modelname "hold.mdl"\n$body body "ref.smd"\n$sequence idle "ref.smd"\n$sequence hold "hold.smd"\n')
+        path = self.compile(qc, self.work/'hold.mdl')
+        model, track, independent = self.child_track(path, 1)
+        source = dc.AnimData(model.data, model.hdr)
+        buf, start = source.sections(1)[0]
+        flags = {bone: f for _, bone, f in dc.rle_records(buf, start, 2)}
+        self.assertEqual(flags[1] & 0x21, 0x21)  # raw Quaternion64 rotation and Vector48 position
+        self.assertEqual(track[0][0], (5000.0, -2048.0, 0.25))
+        self.assertEqual(independent[0]['pos'], (5000.0, -2048.0, 0.25))
+
+    def test_stored_position_step_is_kept(self):
+        self.ref_smd()
+        step = 0.0123
+        frames = [((step * 1000 * k, 0., 0.), (0., 0., 0.)) for k in range(5)]
+        self.anim_smd('slide.smd', frames)
+        qc = self.work/'slide.qc'
+        qc.write_text('$modelname "slide.mdl"\n$body body "ref.smd"\n$sequence idle "ref.smd"\n'
+                      '$boneposscale "child" %.9g 0.01 0.01\n$sequence slide "slide.smd"\n' % step)
+        path = self.compile(qc, self.work/'slide.mdl')
+        bones = mdl52layout.Model(path.read_bytes()).bones()
+        self.assertAlmostEqual(bones[1]['posscale'][0], step, places=7)
+
     def test_rotation_at_both_ends_of_the_range(self):
         # -pi picks Valve's negative-side scale; a value just under +pi then rounds
         # one step past the positive limit and must still compile.

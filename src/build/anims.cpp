@@ -1,6 +1,7 @@
 // Animations: conversion to the global skeleton, studiomdl's processing commands,
 // and encoding into Titanfall 2's v53 per-bone RLE records.
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cmath>
 #include <cstring>
@@ -930,21 +931,139 @@ static std::vector<float> PositionScales(const BuildContext& ctx, const WAnim& a
     return scales;
 }
 
+// Quaternion64: x, y and z in 21 bits each and the sign of w in the top bit.
+static uint64_t PackQuat64(Quat q) {
+    for (int c = 0; c < 3; ++c)
+        if (std::llround(static_cast<double>(q[c]) * 1048576.5) > 1048575) { q = Quat(-q.x, -q.y, -q.z, -q.w); break; }
+    auto unit = [](float v) {
+        long long n = std::llround(static_cast<double>(v) * 1048576.5 + 1048576.0);
+        return static_cast<uint64_t>(std::clamp<long long>(n, 0, 0x1FFFFF));
+    };
+    return unit(q.x) | (unit(q.y) << 21) | (unit(q.z) << 42) | (q.w < 0 ? 1ull << 63 : 0);
+}
+
+// Whether a rotation is the bind (neutral) rotation, allowing for the rounding of bind
+// angles that pass through degrees in a QC.
+static bool SameRotation(const RadianEuler& a, const RadianEuler& b) {
+    Quat p = AngleQuaternion(a), q = AngleQuaternion(b);
+    float same = 0, flipped = 0;  // q and -q are the same rotation
+    for (int c = 0; c < 4; ++c) {
+        same = std::max(same, std::fabs(p[c] - q[c]));
+        flipped = std::max(flipped, std::fabs(p[c] + q[c]));
+    }
+    return std::min(same, flipped) < 1e-6f;
+}
+static bool SamePosition(const Vec3& a, const Vec3& b) {
+    for (int c = 0; c < 3; ++c)
+        if (std::fabs(a[c] - b[c]) > 1e-5f) return false;
+    return true;
+}
+
+// Whether a section stores bone j's position raw: constant over the frames that decide
+// it (a section's own frames), exact at half precision and not the bind pose.
+static bool RawSectionPosition(const BuildContext& ctx, const WAnim& a, int j, int f0, int decide) {
+    const bool delta = (a.flags & STUDIO_DELTA) != 0;
+    auto value = [&](int f) { return delta ? PosDelta(ctx, a, j, f) : a.sanim[f][j].pos; };
+    const Vec3 first = value(f0);
+    if (SamePosition(first, delta ? Vec3() : ctx.bones[j].pos)) return false;
+    for (int f = f0; f < f0 + decide; ++f) {
+        const Vec3 p = value(f);
+        for (int c = 0; c < 3; ++c)
+            if (p[c] != first[c] || HalfToFloat(FloatToHalf(p[c])) != p[c]) return false;
+    }
+    return true;
+}
+
+static uint64_t PackQuat64(Quat q);
+
+// The rotation a Quaternion64 decodes to (w derived from x, y and z).
+static Quat UnpackQuat64(uint64_t v) {
+    double c[3];
+    for (int k = 0; k < 3; ++k) c[k] = (static_cast<double>((v >> (21 * k)) & 0x1FFFFF) - 1048576.0) / 1048576.5;
+    double length = c[0] * c[0] + c[1] * c[1] + c[2] * c[2];
+    double w = length < 1 ? std::sqrt(1 - length) : 0;
+    if (length > 1) for (double& x : c) x /= std::sqrt(length);
+    return Quat(static_cast<float>(c[0]), static_cast<float>(c[1]), static_cast<float>(c[2]),
+                static_cast<float>(v >> 63 ? -w : w));
+}
+
+// Whether a section stores bone j's rotation raw: constant over the deciding frames,
+// not the bind rotation, and accurate as a Quaternion64. Near 180 degrees w is small
+// and derived from x, y and z, so the raw form loses precision; retail keeps such
+// rotations on the animated grid.
+static bool RawSectionRotation(const BuildContext& ctx, const WAnim& a, int j, int f0, int decide) {
+    const bool delta = (a.flags & STUDIO_DELTA) != 0;
+    if (SameRotation(a.sanim[f0][j].rot, delta ? RadianEuler() : ctx.bones[j].rot)) return false;
+    Quat q = AngleQuaternion(a.sanim[f0][j].rot), back = UnpackQuat64(PackQuat64(q));
+    // compare components (q and -q are the same rotation); a dot product cannot
+    // resolve this, as float quaternions are only unit length to about 1e-7
+    double same = 0, flipped = 0;
+    for (int c = 0; c < 4; ++c) {
+        same = std::max(same, std::fabs(static_cast<double>(q[c]) - back[c]));
+        flipped = std::max(flipped, std::fabs(static_cast<double>(q[c]) + back[c]));
+    }
+    if (std::min(same, flipped) > 1e-5) return false;
+    for (int f = f0; f < f0 + decide; ++f)
+        for (int c = 0; c < 3; ++c)
+            if (a.sanim[f][j].rot[c] != a.sanim[f0][j].rot[c]) return false;
+    return true;
+}
+
+// Section ranges {first frame, last frame, deciding frames} as EncodeAnimations writes them.
+static std::vector<std::array<int, 3>> SectionRanges(const WAnim& a, int sf, int sfMin) {
+    std::vector<std::array<int, 3>> out;
+    const bool sectioned = a.numFrames >= sfMin && a.numFrames > sf && sf > 0;
+    if (!sectioned) {
+        out.push_back({0, a.numFrames - 1, a.numFrames});
+        return out;
+    }
+    const int sections = (a.numFrames - 1) / sf + 1;
+    for (int s = 0; s < sections; ++s) {
+        int f0 = s * sf;
+        int f1 = std::min(f0 + sf, a.numFrames - 1);
+        out.push_back({f0, f1, f1 > f0 ? f1 - f0 : 1});
+    }
+    out.push_back({a.numFrames - 1, a.numFrames - 1, 1});
+    return out;
+}
+
 // Encodes frames [f0, f1] of an animation into one bone chain. constFrames: how many
 // leading frames decide whether a value is constant (a section's own frames, without
-// the frame it shares with the next section, as retail decides it).
+// the frame it shares with the next section, as retail decides it). Like retail, a
+// rotation or position that is constant over those frames and not the bind pose is
+// stored raw: rotations as Quaternion64, positions as Vector48 when exact at half
+// precision. Changing channels use the bone's quantized RLE grid.
 static std::vector<uint8_t> EncodeChain(const BuildContext& ctx, const WAnim& a,
-                                        const std::vector<float>&, int f0, int f1, int = -1) {
+                                        const std::vector<float>&, int f0, int f1, int constFrames = -1) {
     Buffer buf;
     size_t previous = SIZE_MAX;
     const bool delta = (a.flags & STUDIO_DELTA) != 0;
+    const int decide = constFrames > 0 ? std::min(constFrames, f1 - f0 + 1) : f1 - f0 + 1;
     for (size_t j = 0; j < ctx.bones.size(); ++j) {
         const auto& bone = ctx.bones[j];
+        const int jj = static_cast<int>(j);
         if ((bone.flags & BONE_ALWAYS_PROCEDURAL) || a.weight[j] < .001f) continue;
+        // raw constant channels
+        auto rawPosition = [&](int f) { return delta ? PosDelta(ctx, a, jj, f) : a.sanim[f][j].pos; };
+        bool rotConst = true, posConst = true, posHalf = true;
+        for (int f = f0; f < f0 + decide; ++f) {
+            Vec3 p = rawPosition(f), p0 = rawPosition(f0);
+            for (int c = 0; c < 3; ++c) {
+                rotConst = rotConst && a.sanim[f][j].rot[c] == a.sanim[f0][j].rot[c];
+                posConst = posConst && p[c] == p0[c];
+                posHalf = posHalf && HalfToFloat(FloatToHalf(p[c])) == p[c];
+            }
+        }
+        const bool rotNeutral = SameRotation(a.sanim[f0][j].rot, delta ? RadianEuler() : bone.rot);
+        const bool posNeutral = SamePosition(rawPosition(f0), delta ? Vec3() : bone.pos);
+        const bool rawRot = RawSectionRotation(ctx, a, jj, f0, decide);
+        (void)rotConst; (void)rotNeutral;
+        const bool rawPos = RawSectionPosition(ctx, a, jj, f0, decide);
+        (void)posConst; (void)posHalf; (void)posNeutral;
         std::vector<int16_t> channels[3][3];
         bool present[3] = {};
         for (int f = f0; f <= f1; ++f) {
-            Vec3 pos = PosDelta(ctx, a, static_cast<int>(j), f);
+            Vec3 pos = PosDelta(ctx, a, jj, f);
             for (int c = 0; c < 3; ++c) {
                 float rot = a.sanim[f][j].rot[c] - (delta ? 0.f : bone.rot[c]);
                 while (rot >= kPi) rot -= 2*kPi;
@@ -952,6 +1071,7 @@ static std::vector<uint8_t> EncodeChain(const BuildContext& ctx, const WAnim& a,
                 float scale = a.sanim[f][j].scale[c] - (delta ? 0.f : bone.scale[c]);
                 const float values[3] = {rot / bone.rotscale[c], pos[c] / bone.posscale[c], scale / bone.scalescale[c]};
                 for (int g = 0; g < 3; ++g) {
+                    if ((g == 0 && rawRot) || (g == 1 && rawPos)) continue;
                     float v = std::round(values[g]);
                     // Valve's scale choice fits the larger side exactly, so a value just
                     // under the other side's limit can round one step past it.
@@ -964,14 +1084,28 @@ static std::vector<uint8_t> EncodeChain(const BuildContext& ctx, const WAnim& a,
                 }
             }
         }
-        if (!present[0] && !present[1] && !present[2]) continue;
+        if (!rawRot && !rawPos && !present[0] && !present[1] && !present[2]) continue;
         size_t rec = buf.Reserve(4);
         buf.PatchAt<uint8_t>(rec, static_cast<uint8_t>(j));
-        uint8_t flags = (delta ? 0x10 : 0) | (present[0] ? 8 : 0) | (present[1] ? 4 : 0) | (present[2] ? 0x80 : 0);
+        uint8_t flags = (delta ? 0x10 : 0) | (rawRot ? 0x20 : present[0] ? 8 : 0) |
+                        (rawPos ? 0x01 : present[1] ? 4 : 0) | (present[2] ? 0x80 : 0);
         buf.PatchAt<uint8_t>(rec + 1, flags);
-        size_t pointers[3] = {};
-        for (int g = 0; g < 3; ++g) if (present[g]) pointers[g] = buf.Reserve(6);
-        for (int g = 0; g < 3; ++g) if (present[g]) {
+        // record data in order: rotation, position, scale
+        size_t pointers[3] = {SIZE_MAX, SIZE_MAX, SIZE_MAX};
+        if (rawRot) {
+            uint64_t q = PackQuat64(AngleQuaternion(a.sanim[f0][j].rot));
+            buf.Bytes(&q, 8);
+        } else if (present[0]) {
+            pointers[0] = buf.Reserve(6);
+        }
+        if (rawPos) {
+            Vec3 p = rawPosition(f0);
+            buf.U16(FloatToHalf(p.x)); buf.U16(FloatToHalf(p.y)); buf.U16(FloatToHalf(p.z));
+        } else if (present[1]) {
+            pointers[1] = buf.Reserve(6);
+        }
+        if (present[2]) pointers[2] = buf.Reserve(6);
+        for (int g = 0; g < 3; ++g) if (pointers[g] != SIZE_MAX) {
             for (int c = 0; c < 3; ++c) {
                 auto stream = EncodeRLE(channels[g][c]);
                 if (StreamIsZero(stream)) continue;
@@ -990,6 +1124,131 @@ static std::vector<uint8_t> EncodeChain(const BuildContext& ctx, const WAnim& a,
         previous = rec;
     }
     if (previous == SIZE_MAX) { buf.U8(255); buf.U8(0); buf.I16(0); }
+    return buf.Data();
+}
+
+// Quaternion48: x and y in 16 bits, z in 15 bits and the sign of w in the top bit.
+// A component of +1 is one step past the top code, while -1 is exact; q and -q are
+// the same rotation, so the sign that keeps every component in range is used.
+static std::array<uint16_t, 3> PackQuat48(Quat q) {
+    if (std::lround(q.x * 32768.f) > 32767 || std::lround(q.y * 32768.f) > 32767 || std::lround(q.z * 16384.f) > 16383)
+        q = Quat(-q.x, -q.y, -q.z, -q.w);
+    auto unit = [](float v, float scale, int top) {
+        long n = std::lround(v * scale + scale);
+        return static_cast<uint16_t>(std::clamp<long>(n, 0, top));
+    };
+    return {unit(q.x, 32768.f, 65535), unit(q.y, 32768.f, 65535),
+            static_cast<uint16_t>(unit(q.z, 16384.f, 32767) | (q.w < 0 ? 0x8000 : 0))};
+}
+
+// Encodes frames [f0, f1] in the frame format retail Titanfall uses for most animations
+// (descriptor flag 0x40): per bone, each channel is omitted when it is the bind pose
+// (zero for deltas), stored once when constant, or stored every frame. Rotations are
+// Quaternion48; positions are Vector48 when every value is exact at half precision and
+// three floats (bone flag 0x40) otherwise; scales are Vector48.
+static std::vector<uint8_t> EncodeFrameBlock(const BuildContext& ctx, const WAnim& a, int f0, int f1) {
+    const int nb = static_cast<int>(ctx.bones.size());
+    const bool delta = (a.flags & STUDIO_DELTA) != 0;
+    const int frames = f1 - f0 + 1;
+    struct Channel { std::vector<std::vector<uint8_t>> values; bool constant = true; bool present = false; };
+    std::vector<uint8_t> flags(nb, 0);
+    std::vector<Buffer> constants(nb), perFrame(nb);
+    for (int j = 0; j < nb; ++j) {
+        const auto& bone = ctx.bones[j];
+        if ((bone.flags & BONE_ALWAYS_PROCEDURAL) || a.weight[j] < .001f) continue;
+        // Exactness of half-precision positions decides between Vector48 and floats.
+        bool halfExact = true;
+        for (int f = f0; f <= f1 && halfExact; ++f) {
+            Vec3 p = delta ? PosDelta(ctx, a, j, f) : a.sanim[f][j].pos;
+            for (int c = 0; c < 3; ++c)
+                if (HalfToFloat(FloatToHalf(p[c])) != p[c]) halfExact = false;
+        }
+        auto bytesOf = [](const void* data, size_t size) {
+            const auto* b = static_cast<const uint8_t*>(data);
+            return std::vector<uint8_t>(b, b + size);
+        };
+        auto rotation = [&](int f) {
+            auto q = PackQuat48(AngleQuaternion(a.sanim[f][j].rot));
+            return bytesOf(q.data(), 6);
+        };
+        auto position = [&](int f) {
+            Vec3 p = delta ? PosDelta(ctx, a, j, f) : a.sanim[f][j].pos;
+            if (!halfExact) return bytesOf(&p, 12);
+            uint16_t h[3] = {FloatToHalf(p.x), FloatToHalf(p.y), FloatToHalf(p.z)};
+            return bytesOf(h, 6);
+        };
+        auto scale = [&](int f) {
+            const Vec3& s = a.sanim[f][j].scale;
+            uint16_t h[3] = {FloatToHalf(s.x), FloatToHalf(s.y), FloatToHalf(s.z)};
+            return bytesOf(h, 6);
+        };
+        // The neutral value an omitted channel decodes to.
+        auto neutralRotation = PackQuat48(delta ? Quat() : AngleQuaternion(bone.rot));
+        Vec3 neutralPos = delta ? Vec3() : bone.pos;
+        Vec3 neutralScale = delta ? Vec3(1, 1, 1) : bone.scale;
+        Channel ch[3];
+        for (int f = f0; f <= f1; ++f) {
+            ch[0].values.push_back(rotation(f));
+            ch[1].values.push_back(position(f));
+            ch[2].values.push_back(scale(f));
+        }
+        for (int g = 0; g < 3; ++g)
+            for (auto& v : ch[g].values) ch[g].constant = ch[g].constant && v == ch[g].values[0];
+        for (int f = f0; f <= f1; ++f) {
+            ch[0].present = ch[0].present || !SameRotation(a.sanim[f][j].rot, delta ? RadianEuler() : bone.rot);
+            Vec3 p = delta ? PosDelta(ctx, a, j, f) : a.sanim[f][j].pos;
+            ch[1].present = ch[1].present || !SamePosition(p, neutralPos);
+            const Vec3& s = a.sanim[f][j].scale;
+            for (int c = 0; c < 3; ++c) ch[2].present = ch[2].present || std::fabs(s[c] - neutralScale[c]) > 1e-6f;
+        }
+        (void)neutralRotation;
+        uint8_t fl = 0;
+        const uint8_t constBits[3] = {0x02, 0x01, 0x04}, frameBits[3] = {0x10, 0x08, 0x20};
+        for (int g = 0; g < 3; ++g) {
+            if (!ch[g].present) continue;
+            if (ch[g].constant) {
+                fl |= constBits[g];
+                constants[j].Bytes(ch[g].values[0].data(), ch[g].values[0].size());
+            } else {
+                fl |= frameBits[g];
+            }
+        }
+        if (fl & 0x09 && !halfExact) fl |= 0x40;
+        flags[j] = fl;
+        // per-frame values, bone by bone: rotation, position, scale
+        for (int f = 0; f < frames; ++f)
+            for (int g = 0; g < 3; ++g)
+                if (fl & frameBits[g]) perFrame[j].Bytes(ch[g].values[f].data(), ch[g].values[f].size());
+    }
+    // offsets within one frame record and within the constants
+    std::vector<uint16_t> frameAt(nb), constAt(nb);
+    size_t frameLength = 0, constLength = 0;
+    for (int j = 0; j < nb; ++j) {
+        frameAt[j] = static_cast<uint16_t>(frameLength);
+        constAt[j] = static_cast<uint16_t>(constLength);
+        frameLength += perFrame[j].Size() / frames;
+        constLength += constants[j].Size();
+    }
+    if (frameLength > 65535 || constLength > 65535) Fatal("animation %s: frame-encoded block too large", a.name.c_str());
+    Buffer buf;
+    size_t header = buf.Reserve(24);
+    for (uint8_t f : flags) buf.U8(f);
+    buf.Align(4);
+    size_t table = buf.Tell();
+    for (int j = 0; j < nb; ++j) { buf.U16(frameAt[j]); buf.U16(constAt[j]); }
+    size_t constStart = buf.Tell();
+    for (int j = 0; j < nb; ++j) buf.Bytes(constants[j].Data().data(), constants[j].Size());
+    buf.Align(4);
+    size_t frameStart = buf.Tell();
+    for (int f = 0; f < frames; ++f)
+        for (int j = 0; j < nb; ++j) {
+            size_t length = perFrame[j].Size() / frames;
+            if (length) buf.Bytes(perFrame[j].Data().data() + f * length, length);
+        }
+    buf.PatchI32(header + 0, static_cast<int32_t>(constStart));
+    buf.PatchI32(header + 4, static_cast<int32_t>(frameStart));
+    buf.PatchI32(header + 8, static_cast<int32_t>(frameLength));
+    buf.PatchI32(header + 16, static_cast<int32_t>(table));
     return buf.Data();
 }
 
@@ -1335,11 +1594,42 @@ void ProcessIKRules(BuildContext& ctx) {
 void EncodeAnimations(BuildContext& ctx) {
     auto& bones = ctx.bones;
     const int nb = static_cast<int>(bones.size());
+    const int sfAll = ctx.qc.sectionFrames > 0 ? ctx.qc.sectionFrames : 30;
+    const int sfMinAll = ctx.qc.sectionFrames > 0 ? ctx.qc.sectionMinFrames : 120;
+    // Stored (retail) scales only need to fit the values the RLE grid quantizes: raw
+    // section constants and frame-encoded animations do not use it. Retail uses the
+    // full asymmetric range (-32768 .. 32767 steps), so each side is checked alone.
+    auto quantizedRange = [&](int j, bool rotation, int c, float& low, float& high) {
+        low = high = 0.f;
+        for (const auto& a : ctx.anims) {
+            if (a.qc && a.qc->frameAnim) continue;
+            const bool delta = (a.flags & STUDIO_DELTA) != 0;
+            for (const auto& r : SectionRanges(a, sfAll, sfMinAll)) {
+                if (rotation ? RawSectionRotation(ctx, a, j, r[0], r[2]) : RawSectionPosition(ctx, a, j, r[0], r[2])) continue;
+                for (int f = r[0]; f <= r[1]; ++f) {
+                    float v;
+                    if (rotation) {
+                        v = a.sanim[f][j].rot[c] - (delta ? 0.f : bones[j].rot[c]);
+                        while (v >= kPi) v -= 2 * kPi;
+                        while (v < -kPi) v += 2 * kPi;
+                    } else {
+                        v = PosDelta(ctx, a, j, f)[c];
+                    }
+                    low = std::min(low, v);
+                    high = std::max(high, v);
+                }
+            }
+        }
+    };
+    auto fits = [](float low, float high, float scale) {
+        return scale > 0 && -low <= scale * 32768.5f && high <= scale * 32767.5f;
+    };
     // global rotation scales (CompressAnimations)
     for (int j = 0; j < nb; j++) {
         for (int k = 0; k < 3; k++) {
             float minv = -kPi / 8, maxv = kPi / 8;
             for (auto& a : ctx.anims) {
+                if (a.qc && a.qc->frameAnim) continue;  // quaternions, not the RLE grid
                 for (int n = 0; n < a.numFrames; n++) {
                     float v = (a.flags & STUDIO_DELTA) ? a.sanim[n][j].rot[k] : a.sanim[n][j].rot[k] - bones[j].rot[k];
                     while (v >= kPi) v -= 2 * kPi;
@@ -1353,10 +1643,12 @@ void EncodeAnimations(BuildContext& ctx) {
             // a stored scale (decompiled models) keeps the retail quantization grid when
             // the animations fit it; some retail scales are slightly too small for the
             // raw quaternion sections they were stored beside
-            for (auto& rs : ctx.qc.boneRotScales)
-                if (IEquals(rs.first, bones[j].name) &&
-                    -minv <= rs.second[k] * 32768.5f && maxv <= rs.second[k] * 32767.5f)
-                    bones[j].rotscale[k] = rs.second[k];
+            for (auto& rs : ctx.qc.boneRotScales) {
+                if (!IEquals(rs.first, bones[j].name)) continue;
+                float low, high;
+                quantizedRange(j, true, k, low, high);
+                if (fits(low, high, rs.second[k])) bones[j].rotscale[k] = rs.second[k];
+            }
         }
     }
     // v52 position compression scales live in the bone, shared by every animation.
@@ -1364,9 +1656,18 @@ void EncodeAnimations(BuildContext& ctx) {
         for (int c = 0; c < 3; ++c) {
             float extent = 128.f;
             for (const auto& a : ctx.anims)
+                if (!(a.qc && a.qc->frameAnim))
                 for (int f = 0; f < a.numFrames; ++f)
                     extent = std::max(extent, std::fabs(PosDelta(ctx, a, j, f)[c]));
             bones[j].posscale[c] = std::nextafter(extent / 32767.f, INFINITY);
+        }
+        for (auto& ps : ctx.qc.bonePosScales) {
+            if (!IEquals(ps.first, bones[j].name)) continue;
+            for (int c = 0; c < 3; ++c) {
+                float low, high;
+                quantizedRange(j, false, c, low, high);
+                if (fits(low, high, ps.second[c])) bones[j].posscale[c] = ps.second[c];
+            }
         }
     }
     // Scale steps stay at retail's 1/2048 unless an animated scale change exceeds its
@@ -1375,6 +1676,7 @@ void EncodeAnimations(BuildContext& ctx) {
         for (int c = 0; c < 3; ++c) {
             float extent = 0.f;
             for (const auto& a : ctx.anims) {
+                if (a.qc && a.qc->frameAnim) continue;
                 const bool delta = (a.flags & STUDIO_DELTA) != 0;
                 for (int f = 0; f < a.numFrames; ++f)
                     extent = std::max(extent, std::fabs(a.sanim[f][j].scale[c] - (delta ? 0.f : bones[j].scale[c])));
@@ -1391,6 +1693,8 @@ void EncodeAnimations(BuildContext& ctx) {
         // only the bits retail animation descriptors use (looping, snap, delta, all-zeros,
         // 0x20000, frame movement); build-time flags such as noforceloop are not stored
         ca.flags = a.flags & (0x1 | 0x2 | 0x4 | 0x20 | 0x20000 | STUDIO_FRAMEMOVEMENT);
+        const bool frameEncoded = a.qc && a.qc->frameAnim;
+        if (frameEncoded) ca.flags |= 0x40;  // STUDIO_FRAMEANIM
         if (!a.frameMove.empty()) ca.frameMovement = EncodeFrameMovement(a.frameMove, a.fixedFmScales ? &a.fmScales : nullptr);
         else ca.flags &= ~STUDIO_FRAMEMOVEMENT;
         ca.numFrames = a.numFrames;
@@ -1405,8 +1709,11 @@ void EncodeAnimations(BuildContext& ctx) {
                 int j = ctx.FindBone(ps.first);
                 if (j >= 0 && ps.second > 0) posScales[j] = ps.second;
             }
+        auto encode = [&](int f0, int f1, int constFrames) {
+            return frameEncoded ? EncodeFrameBlock(ctx, a, f0, f1) : EncodeChain(ctx, a, posScales, f0, f1, constFrames);
+        };
         if (!sectioned) {
-            ca.sections.push_back(EncodeChain(ctx, a, posScales, 0, a.numFrames - 1));
+            ca.sections.push_back(encode(0, a.numFrames - 1, -1));
         } else {
             ca.sectionFrames = sf;
             int nsec = (a.numFrames - 1) / sf + 1;
@@ -1415,10 +1722,10 @@ void EncodeAnimations(BuildContext& ctx) {
                 int f1 = std::min(f0 + sf, a.numFrames - 1);
                 // The final frame also has its own trailing chain when this is
                 // a partial section. It must not change constant-channel choice.
-                ca.sections.push_back(EncodeChain(ctx, a, posScales, f0, f1, f1 > f0 ? f1 - f0 : -1));
+                ca.sections.push_back(encode(f0, f1, f1 > f0 ? f1 - f0 : -1));
             }
             // trailing section with only the final frame
-            ca.sections.push_back(EncodeChain(ctx, a, posScales, a.numFrames - 1, a.numFrames - 1));
+            ca.sections.push_back(encode(a.numFrames - 1, a.numFrames - 1, -1));
         }
         ctx.out.animations.push_back(std::move(ca));
     }

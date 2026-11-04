@@ -31,9 +31,13 @@ Mat3x4 Invert(const Mat3x4& in) {
 
 Mat3x4 AngleMatrix(const RadianEuler& a) {
     // Source: AngleMatrix(QAngle(pitch = a.y, yaw = a.z, roll = a.x))
-    float sy = std::sin(a.z), cy = std::cos(a.z);
-    float sp = std::sin(a.y), cp = std::cos(a.y);
-    float sr = std::sin(a.x), cr = std::cos(a.x);
+    // Float sine and cosine of right angles leave ~4e-8 instead of 0; that residue
+    // makes exact positions (e.g. half-precision animation constants) inexact after a
+    // 90 degree root rotation. Values below 1e-6 are angles under a microradian.
+    auto snap = [](float v) { return std::fabs(v) < 1e-6f ? 0.f : v; };
+    float sy = snap(std::sin(a.z)), cy = snap(std::cos(a.z));
+    float sp = snap(std::sin(a.y)), cp = snap(std::cos(a.y));
+    float sr = snap(std::sin(a.x)), cr = snap(std::cos(a.x));
     Mat3x4 m;
     m.m[0][0] = cp * cy;
     m.m[1][0] = cp * sy;

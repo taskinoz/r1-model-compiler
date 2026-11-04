@@ -815,6 +815,9 @@ bool Parser::ParseAnimationToken(QcAnimation& a) {
         a.flags |= STUDIO_LOOPING;
     } else if (StartsWithI(T(), "snap")) {
         a.flags |= STUDIO_SNAP;
+    } else if (Is("frameanim")) {
+        // r1c extension: store this animation frame-encoded, as most retail animations are
+        a.frameAnim = true;
     } else if (StartsWithI(T(), "frame")) {
         a.startFrame = I("start frame");
         a.endFrame = I("end frame");
@@ -1806,6 +1809,11 @@ void Parser::Register() {
     h["$bonerotscale"] = [&] {
         std::string bone = S("bone");
         m_.boneRotScales.push_back({bone, V3()});
+    };
+    // r1c extension: a bone's retail position step (v52 shares one across animations)
+    h["$boneposscale"] = [&] {
+        std::string bone = S("bone");
+        m_.bonePosScales.push_back({bone, V3()});
     };
     h["$node"] = [&] { m_.nodes.push_back(S("node name")); };
     h["$localnodeunk"] = [&] { m_.localNodeUnk = I("value"); };

@@ -154,8 +154,7 @@ def summary(path):
                                tuple(round(v, 3) for v in rng), round(r['height'], 2), round(r['radius'], 2),
                                round(r['floor'], 2), round(r['endHeight'], 2)),
                        'pos': tuple(r['pos']), 'errors': errs})
-        # Retail frame-encoded data (0x40) is rebuilt as RLE; the encoding is not compared.
-        anims.append({'name': name, 'frames': nf, 'delta': delta, 'flags': a['flags'] & ~dc.STUDIO_FRAMEANIM,
+        anims.append({'name': name, 'frames': nf, 'delta': delta, 'flags': a['flags'],
                       'scale': scales, 'ik': ik,
                       'world': {f: (local_delta(pose) if delta else world_positions(bones, pose))
                                 for f, pose in zip(sample, frames)}})

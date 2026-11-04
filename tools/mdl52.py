@@ -179,8 +179,8 @@ class Model(Binary):
         a = self.animations[animation]
         if not 0 <= frame < a['frames']:
             raise FormatError('frame outside animation')
-        if a['block'] or a['flags'] & 0x40:
-            raise FormatError('external or frame-encoded animation is not supported by this RLE decoder')
+        if a['block']:
+            raise FormatError('external animation blocks are not supported by this decoder')
         delta = bool(a['flags'] & 4)
         pose = [{'pos':(0.,0.,0.) if delta else b['pos'],
                  'rot':(0.,0.,0.) if delta else b['rot'],
@@ -198,6 +198,8 @@ class Model(Binary):
             if block:
                 raise FormatError('external animation section')
             offset = a['offset'] + relative
+        if a['flags'] & 0x40:
+            return self.decode_frame_block(offset, local, pose)
         visited = set()
         for _ in range(len(self.bones) + 1):
             bone, flags, next_offset = self.read('BBh',offset)
@@ -206,11 +208,27 @@ class Model(Binary):
             if bone >= len(self.bones) or bone in visited:
                 raise FormatError('invalid/duplicate animation bone')
             visited.add(bone)
-            if flags & (1|2|0x20|0x40):
-                raise FormatError('raw channels are not supported by this RLE decoder yet')
+            # at most one rotation form (raw Q48 0x02, animated 0x08, raw Q64 0x20), one
+            # position form (raw 0x01, animated 0x04) and one scale form (raw 0x40, animated 0x80)
+            if bin(flags & 0x2a).count('1') > 1 or (flags & 0x05) == 0x05 or (flags & 0xc0) == 0xc0:
+                raise FormatError('conflicting raw and animated RLE channels')
             ptr = offset + 4
-            for key, mask, scale_key in [('rot',8,'rotscale'),('pos',4,'posscale'),('scale',0x80,'scalescale')]:
-                if flags & mask:
+            # rotation, position, scale; raw channels are stored values, animated ones
+            # are offsets to RLE streams relative to their group
+            for key, raw, raw_size, mask, scale_key in [('rot',0x22,None,8,'rotscale'),('pos',0x01,6,4,'posscale'),
+                                                       ('scale',0x40,6,0x80,'scalescale')]:
+                if flags & raw:
+                    if key == 'rot':
+                        if flags & 0x02:
+                            q = quaternion48(self, ptr); ptr += 6
+                        else:
+                            q = quaternion64(self.read('Q', ptr)[0]); ptr += 8
+                        pose[bone][key] = quaternion_angles(q)
+                    else:
+                        pose[bone][key] = tuple(struct.unpack('<3e', self.span(ptr, 6))); ptr += 6
+                    if not all(math.isfinite(v) for v in pose[bone][key]):
+                        raise FormatError('nonfinite raw animation value')
+                elif flags & mask:
                     values = self.read('3h',ptr)
                     base = (0.,0.,0.) if flags & 0x10 else self.bones[bone][key]
                     pose[bone][key] = tuple(base[c] + (rle_value(self,ptr+values[c],local) if values[c] else 0)*self.bones[bone][scale_key][c] for c in range(3))
@@ -223,6 +241,76 @@ class Model(Binary):
         else:
             raise FormatError('unterminated animation chain')
         return pose
+
+
+def quaternion48(binary, offset):
+    a, b, c = binary.read('3H', offset)
+    x, y, z = (a - 32768) / 32768, (b - 32768) / 32768, ((c & 0x7fff) - 16384) / 16384
+    return unit_quaternion(x, y, z, c & 0x8000)
+
+
+def unit_quaternion(x, y, z, negative_w):
+    """w for a compressed quaternion; over-length retail values are normalized."""
+    length = x*x + y*y + z*z
+    if length > 1:
+        k = 1 / math.sqrt(length)
+        return (x*k, y*k, z*k, 0.)
+    w = math.sqrt(1 - length)
+    return (x, y, z, -w if negative_w else w)
+
+
+def quaternion64(v):
+    x, y, z = ((((v >> bits) & 0x1FFFFF) - 1048576) / 1048576.5 for bits in (0, 21, 42))
+    return unit_quaternion(x, y, z, v >> 63)
+
+
+def quaternion_angles(q):
+    """RadianEuler (roll, pitch, yaw) of a quaternion, as Source's QuaternionAngles."""
+    x, y, z, w = q
+    m00, m10, m20 = 1-2*(y*y+z*z), 2*(x*y+w*z), 2*(x*z-w*y)
+    m21, m22 = 2*(y*z+w*x), 1-2*(x*x+y*y)
+    m01, m11 = 2*(x*y-w*z), 1-2*(x*x+z*z)
+    xy = math.hypot(m00, m10)
+    if xy > 1e-10:
+        return (math.atan2(m21, m22), math.atan2(-m20, xy), math.atan2(m10, m00))
+    return (0., math.atan2(-m20, xy), math.atan2(-m01, m11))
+
+
+def _decode_frame_block(self, start, local, pose):
+    """One frame of a frame-encoded block (descriptor flag 0x40)."""
+    constants, frames, length, _, table, _ = self.read('6i', start)
+    nb = len(self.bones)
+    flags = self.span(start + 24, nb)
+    if length < 0 or table < 0 or not 0 <= constants <= frames:
+        raise FormatError('invalid frame-encoded animation header')
+    for bone, f in enumerate(flags):
+        if f & ~0x7f:
+            raise FormatError('unknown frame-encoded bone flag')
+        frame_at, const_at = self.read('2H', start + table + 4 * bone)
+        cp, fp = start + constants + const_at, start + frames + local * length + frame_at
+        if frame_at > length:
+            raise FormatError('frame-encoded bone offset outside the frame')
+        values = {}
+        for source in ('const', 'frame'):
+            p = cp if source == 'const' else fp
+            rot_bit, pos_bit, scale_bit = (0x02, 0x01, 0x04) if source == 'const' else (0x10, 0x08, 0x20)
+            if f & rot_bit:
+                values['rot'] = quaternion_angles(quaternion48(self, p)); p += 6
+            if f & pos_bit:
+                if f & 0x40:
+                    values['pos'] = self.read('3f', p); p += 12
+                else:
+                    values['pos'] = tuple(struct.unpack('<3e', self.span(p, 6))); p += 6
+            if f & scale_bit:
+                values['scale'] = tuple(struct.unpack('<3e', self.span(p, 6))); p += 6
+        for key, value in values.items():
+            if not all(math.isfinite(v) for v in value):
+                raise FormatError('nonfinite frame-encoded value')
+            pose[bone][key] = tuple(value)
+    return pose
+
+
+Model.decode_frame_block = _decode_frame_block
 
 
 def inspect(path, decode=False):
