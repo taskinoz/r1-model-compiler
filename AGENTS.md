@@ -7,6 +7,20 @@ Read README.md, VALIDATION.md and docs/mdl-v52-format.md before changing the wri
 - Add native tests in tests/test_compiler52.py for every supported feature.
 - tools/mdl52.py is an independent bounds/geometry reader and RLE decoder.
 - tools/survey52.py surveys existing files; it is not a compiler roundtrip test.
+- tools/decompile52.py turns a retail v52 model (+ .vvd/.dx11.vtx/.vvc/.phy/.ani
+  beside it) into QC + SMD/DMX that r1studiomdl rebuilds, like the TF2 project's
+  decompile53.py. tools/mdl52layout.py holds its struct layouts.
+  tools/roundtrip52.py decompiles, recompiles and compares a corpus
+  (`--jobs`, `--resume`, `--discard-sources`; results.json per model). Tests:
+  tests/test_decompile52.py. A full Online corpus run takes about an hour at 12 jobs.
+- Rebuilding build\r1studiomdl.exe while a corpus run uses it breaks that run; use
+  build-dev.bat for experiments meanwhile.
+- Retail format facts found by decompiling (frame-encoded animations, RLE raw
+  channels, VVD fixups, anim blocks, file-relative srcbonetransformindex, stale
+  companions) are in docs/mdl-v52-format.md. Check a new rule against the whole
+  corpus before relying on it.
+- Shell edits through a bash heredoc can mangle backslashes in Python strings; write
+  patch scripts to a file instead.
 - Never widen comparison tolerances to make a model pass. Keep errors visible.
 - Native retail files and generated outputs stay ignored in test-output/.
 - Keep validation output small; preserve reports, remove regenerated meshes/models.

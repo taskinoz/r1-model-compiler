@@ -57,3 +57,71 @@ in the MDL (the extended header's name, mirrored at 0x0C), not the path the MDL
 was opened from. A model file renamed or moved after compiling still loads on the
 server, but the client finds no render data and draws nothing, without an error.
 Compile with the `$modelname` the model will be shipped under.
+
+## Retail animation encodings
+
+Established from all 3,514 Titanfall Online models while writing
+`tools/decompile52.py`.
+
+**RLE records** (`{u8 bone; u8 flags; i16 next}`) store, in order: rotation, then
+position, then scale. Rotation is raw Quaternion48 (0x02, 6 bytes), raw
+Quaternion64 (0x20, 8 bytes) or animated Euler angles (0x08: three channel
+offsets relative to the group, value x bone rotscale + bind angle). Position is raw
+Vector48 (0x01) or animated (0x04, value x bone posscale + bind position). Scale is
+raw Vector48 (0x40) or animated (0x80, value x scalescale + bind scale). Record flag
+0x10 marks a delta record (no bind pose added).
+
+**Frame-encoded animations** (animation descriptor flag 0x40; 9,657 of the retail
+animations) store each block as:
+
+| Offset | Field |
+|---|---|
+| +0x00 | constants offset |
+| +0x04 | frame data offset |
+| +0x08 | bytes per frame |
+| +0x10 | per-bone offset table offset |
+| +0x18 | one flag byte per bone |
+
+The per-bone table holds `{u16 offset into each frame, u16 offset into the
+constants}`. Bone flags: constant position 0x01, constant rotation 0x02, constant
+scale 0x04, per-frame position 0x08, per-frame rotation 0x10, per-frame scale 0x20.
+0x40 stores the bone's position as three floats (12 bytes) instead of Vector48.
+Within a bone, values are rotation (Quaternion48), position, then scale (Vector48),
+for both the constants and each frame. Values are absolute local transforms (deltas
+for delta animations). Unflagged bones keep the bind pose.
+
+Both encodings can be split into sections (`sectionframes`): the section table
+holds `{animblock, offset}` pairs, one per `sectionframes` frames plus a trailing
+section holding only the final frame. A non-zero animation block (69 models) means
+the data is in the external `.ani` file at `block.datastart + offset`; the block
+table is at header 0x164 (`{datastart, dataend}` pairs, count at 0x160).
+
+Sequence flag 0x80000 is set on sequences whose animations are all single-frame,
+but only in some models (1,939 sequences with it, 1,803 without); it is
+consistent within each model and preserved with `$singleframeflag`.
+
+## Vertex fixups
+
+441 retail VVD files have fixup tables (`{lod, source vertex, count}`). MDL vertex
+indices refer to the fixed-up LOD 0 list: the stored ranges of every fixup in
+order. VVC colours and second UVs are stored parallel to the VVD's stored vertices.
+
+## Corrupt per-triangle collision
+
+24 retail foliage models (for example `foliage/grass_02_tall_32x32.mdl`) have
+per-triangle collision blocks whose "vertices" are 32-bit values that look like
+heap addresses, so their triangle indices fall outside the vertex list. The
+decompiler leaves these out; the compiler rebuilds the tree from the render mesh.
+
+## Extended-header offsets
+
+`studiohdr2_t` offsets are relative to the extended header, except
+`srcbonetransformindex` (+0x04), which is from the start of the file: Source reads
+it through `studiohdr_t`, and all 67 retail models with source-bone transforms
+store it that way. The compiler wrote it header-relative until 5 November 2026.
+
+## Stale companions
+
+Some retail companions belong to another build: `p_f_skits.dx11.vtx` has one body
+part and two models while its MDL has none, and its checksum differs. Tools must
+ignore a companion whose checksum (VVD/VVC +8, VTX +16, PHY +12) does not match.

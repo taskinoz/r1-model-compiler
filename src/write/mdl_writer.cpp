@@ -201,8 +201,8 @@ void MdlWriter::WriteBones() {
         f(0xBC, bn.scale.x); f(0xC0, bn.scale.y); f(0xC4, bn.scale.z);
         f(0x48, bn.posscale.x); f(0x4C, bn.posscale.y); f(0x50, bn.posscale.z);
         f(0x54, bn.rotscale.x); f(0x58, bn.rotscale.y); f(0x5C, bn.rotscale.z);
-        // retail: scalescale is always 1/2048 and qAlignment is always zero
-        f(0xC8, 1.f / 2048); f(0xCC, 1.f / 2048); f(0xD0, 1.f / 2048);
+        // retail: scalescale is 1/2048 unless a scale animation needs more range; qAlignment is zero
+        f(0xC8, bn.scalescale.x); f(0xCC, bn.scalescale.y); f(0xD0, bn.scalescale.z);
         for (int r = 0; r < 3; r++)
             for (int c = 0; c < 4; c++) f(0x60 + (r * 4 + c) * 4, bn.poseToBone.m[r][c]);
         f(0x90, 0.f); f(0x94, 0.f); f(0x98, 0.f); f(0x9C, 0.f);
@@ -648,7 +648,9 @@ void MdlWriter::WriteKeyValues() {
         Hdr(H_KEYVALUESIZE, static_cast<int>(kv.size() + 1));
     }
     b_.Align(4);
-    HdrHere(H_SRCBONETRANSFORMINDEX);
+    // Unlike the extended header's other offsets, this one is from the start of the
+    // file (Source reads it through studiohdr_t; retail v52 stores it that way).
+    Hdr(H_SRCBONETRANSFORMINDEX, static_cast<int32_t>(b_.Tell()));
     Hdr(H_NUMSRCBONETRANSFORM, static_cast<int>(m_.srcBoneTransforms.size()));
     for (auto& t : m_.srcBoneTransforms) {
         size_t p = b_.Tell();

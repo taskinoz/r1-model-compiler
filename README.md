@@ -7,9 +7,9 @@ source frontend and build pipeline but writing the native v52 layouts.
 
 Titanfall Online's locally inspected models also use v52. They are useful format
 references, but matching that version does not establish runtime compatibility.
-Selected **TFORevive dedicated-server loading, animation, collision and physics
-smoke tests pass**. Client rendering and a native retail decompile/recompile corpus
-remain pending.
+The authored examples pass **TFORevive dedicated-server and client** runs, and
+**3,486 of 3,514 retail Titanfall Online models round-trip** through the v52
+decompiler and compiler with every compared field matching.
 See [VALIDATION.md](VALIDATION.md) for the precise evidence and limitations.
 
 ## Build and use
@@ -46,6 +46,34 @@ This is not a Portal/SFM compiler or a direct importer for their compiled MDLs.
 Source models can be decompiled to QC/SMD/DMX and compiled for this target, subject
 to differences in supported features. Direct Source `.phy` import is not implemented;
 use its decompiled collision mesh. No proprietary game data is distributed.
+
+## Decompiling retail models
+
+`tools/decompile52.py` turns a v52 model into a QC with SMD/DMX sources that
+`r1studiomdl` rebuilds, as `decompile53.py` does for Titanfall 2. It reads the
+companions beside the `.mdl`: `.vvd` (with fixup tables), `.dx11.vtx`, `.vvc`, `.phy`
+and the external `.ani` holding animation blocks. It decodes every retail animation
+encoding: RLE (raw Quaternion48/64 and Vector48 channels included), frame-encoded
+animations, sections and animation blocks. Companions whose checksum does not
+match the MDL are ignored, as the game would.
+
+```powershell
+python tools\decompile52.py "D:\path\to\models\robots\marvin\marvin.mdl" out\marvin
+.\build\r1studiomdl.exe -o out\marvin\rebuilt.mdl out\marvin\marvin.qc
+python tools\roundtrip52.py --jobs 12 --discard-sources --out test-output\rt52 "D:\path\to\models"
+```
+
+`roundtrip52.py` decompiles, recompiles and compares each model: name, header
+flags, bones and bind pose, textures, triangle counts and LOD 0 corner positions,
+sequences, animation world positions (0.25 in), IK rules, bone scale, PHY solids and
+volume, attachments, hitbox sets and procedural bones. It checkpoints
+`results.json`; `--resume` continues a run.
+
+The decompiler writes these r1c QC extensions where retail cannot be derived:
+`$singleframeflag` (sequence flag 0x80000 on single-frame sequences, set per model
+by some retail builds), `$texture "name"` (material entries no mesh uses) and the
+animation option `noscaleflag` (scaled bones without HAS_SCALE). Rebuilt animations
+are always RLE; retail frame-encoded data is compared by decoded pose.
 
 ## Tests and inspection
 

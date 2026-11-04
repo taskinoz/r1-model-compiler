@@ -845,6 +845,9 @@ bool Parser::ParseAnimationToken(QcAnimation& a) {
         // r2c extension: HAS_SCALE even without scaled bones (titan_buddy_embark sets it
         // on every animation)
         a.flags |= STUDIO_HAS_SCALE;
+    } else if (Is("noscaleflag")) {
+        // r1c extension: retail animations of scaled bones need not carry HAS_SCALE
+        a.noScaleFlag = true;
     } else if (Is("posscale")) {
         std::string bone = S("bone");
         a.posScales.push_back({bone, F("position scale")});
@@ -1850,6 +1853,9 @@ void Parser::Register() {
         if (m_.perTriMode != 0 && m_.perTriMode != 2) Fatal("$pertricollision must be 0 or 2");
     };
     h["$zerounusedlods"] = [&] { m_.zeroUnusedLods = true; };
+    h["$singleframeflag"] = [&] { m_.singleFrameFlag = true; };
+    // r1c extension: a material-table entry no mesh uses (retail animation-only models keep them)
+    h["$texture"] = [&] { m_.TextureIndex(S("texture name"), true); };
     h["$pertrimesh"] = [&] {
         std::string name = S("per-triangle mesh file");
         std::string path = ResolveSource(name, "pertri");

@@ -328,6 +328,11 @@ void BuildContext::BuildSequences() {
             s.animIndices[k * s.groupSize[0] + j] = static_cast<int16_t>(a);
             if (anims[a].flags & STUDIO_HAS_SCALE) s.flags |= STUDIO_HAS_SCALE;  // as retail sequences do
         }
+        if (qc.singleFrameFlag) {
+            bool single = true;
+            for (int16_t ai : s.animIndices) single = single && anims[ai].numFrames <= 1;
+            if (single) s.flags |= 0x80000;
+        }
         const WAnim& first = anims[s.animIndices[0]];
         // blends / pose keys
         for (int p = 0; p < 2; p++) {
@@ -510,7 +515,7 @@ void BuildContext::FinalizeBones() {
         b.quat = AngleQuaternion(g.rot);  // retail stores it unaligned (w may be negative)
         b.rotscale = g.rotscale;
         b.posscale = g.posscale;  // v52 shares position scales across animations
-        b.scalescale = Vec3();
+        b.scalescale = g.scalescale;
         b.boneToPose = g.boneToPose;
         b.poseToBone = Invert(g.boneToPose);
         b.flags = g.flags;

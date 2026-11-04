@@ -1,0 +1,187 @@
+"""Regression tests for the native v52 decompiler and round-trip runner."""
+from pathlib import Path
+import math
+import os
+import re
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT/'tools'))
+import decompile52 as dc  # noqa: E402
+import mdl52  # noqa: E402
+import mdl52layout  # noqa: E402
+import roundtrip52  # noqa: E402
+
+
+def q48(q):
+    x, y, z, w = q
+    return struct.pack('<3H', round(x*32768+32768), round(y*32768+32768), (round(z*16384+16384) & 0x7FFF) | (0x8000 if w < 0 else 0))
+
+
+def v48(v):
+    return struct.pack('<3e', *v)
+
+
+class DecompileV52(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.compiler = Path(os.environ.get('R1C_COMPILER', ROOT/'build/r1studiomdl.exe')).resolve()
+        if not cls.compiler.exists():
+            raise RuntimeError('build r1studiomdl before running decompiler tests')
+
+    def setUp(self):
+        (ROOT/'test-output').mkdir(exist_ok=True)
+        temp = tempfile.TemporaryDirectory(dir=ROOT/'test-output')
+        self.addCleanup(temp.cleanup)
+        self.work = Path(temp.name)
+
+    def compile(self, qc_path, output):
+        result = subprocess.run([str(self.compiler), '-quiet', '-o', str(output), str(qc_path)],
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        mdl52.inspect(output, decode=True)
+        return output
+
+    def roundtrip(self, original):
+        qc = dc.decompile(str(original), str(self.work/(original.stem + '_dc')))
+        rebuilt = self.compile(qc, self.work/(original.stem + '_dc')/'recompiled.mdl')
+        return roundtrip52.compare(roundtrip52.summary(str(original)), roundtrip52.summary(str(rebuilt)))
+
+    def test_example_models_round_trip(self):
+        for source in sorted((ROOT/'examples').rglob('*.qc')):
+            with self.subTest(source=source.name):
+                qc = re.sub(r'"([^"]+\.smd)"', lambda m: '"' + (source.parent/m[1]).as_posix() + '"', source.read_text())
+                path = self.work/(source.stem + '.qc')
+                path.write_text(qc, encoding='utf-8')
+                original = self.compile(path, self.work/(source.stem + '.mdl'))
+                self.assertEqual(self.roundtrip(original), [])
+
+    def test_single_frame_flag_and_unused_texture(self):
+        (self.work/'body.smd').write_text('\n'.join([
+            'version 1', 'nodes', '0 "root" -1', 'end', 'skeleton', 'time 0', '0 0 0 0 0 0 0', 'end',
+            'triangles', 'test/material', '0 0 0 0 0 0 1 0 0 1 0 1', '0 1 0 0 0 0 1 1 0 1 0 1',
+            '0 0 1 0 0 0 1 0 1 1 0 1', 'end']) + '\n')
+        lines = ['version 1', 'nodes', '0 "root" -1', 'end', 'skeleton']
+        for t in range(4):
+            lines += ['time %d' % t, '0 %d 0 0 0 0 0' % t]
+        (self.work/'move.smd').write_text('\n'.join(lines + ['end']) + '\n')
+        qc = self.work/'flags.qc'
+        qc.write_text('$modelname "flags.mdl"\n$body body "body.smd"\n$texture "test/unused"\n'
+                      '$singleframeflag\n$sequence idle "body.smd"\n$sequence move "move.smd"\n')
+        model = mdl52layout.Model(self.compile(qc, self.work/'flags.mdl').read_bytes())
+        h = model.hdr
+        flags = [struct.unpack_from('<i', model.data, h['localseqindex'] + i * 0xD4 + 12)[0] for i in range(2)]
+        self.assertEqual([bool(f & 0x80000) for f in flags], [True, False])
+        textures = [mdl52layout.cstr(model.data, h['textureindex'] + i*0x40 + struct.unpack_from('<i', model.data, h['textureindex'] + i*0x40)[0])
+                    for i in range(h['numtextures'])]
+        self.assertEqual(textures, ['test/material', 'test/unused'])
+        self.assertEqual(self.roundtrip(self.work/'flags.mdl'), [])
+
+    def ref_smd(self, name='ref.smd'):
+        (self.work/name).write_text('\n'.join([
+            'version 1', 'nodes', '0 "root" -1', '1 "child" 0', 'end', 'skeleton', 'time 0', '0 0 0 0 0 0 0',
+            '1 1 0 0 0 0 0', 'end', 'triangles', 'test/material', '1 0 0 0 0 0 1 0 0 1 1 1',
+            '1 1 0 0 0 0 1 1 0 1 1 1', '1 0 1 0 0 0 1 0 1 1 1 1', 'end']) + '\n')
+
+    def test_source_bone_transform_offset_is_from_file_start(self):
+        self.ref_smd()
+        qc = self.work/'src.qc'
+        values = ' '.join(str(v) for v in [1, 0, 0, 2, 0, 1, 0, 3, 0, 0, 1, 4] * 2)
+        qc.write_text('$modelname "src.mdl"\n$body body "ref.smd"\n$sequence idle "ref.smd"\n'
+                      '$srcbonetransform "child" %s\n' % values)
+        data = self.compile(qc, self.work/'src.mdl').read_bytes()
+        hdr2 = struct.unpack_from('<i', data, 0x190)[0]
+        count, index = struct.unpack_from('<2i', data, hdr2)
+        self.assertEqual(count, 1)
+        self.assertEqual(mdl52layout.cstr(data, index + struct.unpack_from('<i', data, index)[0]), 'child')
+        self.assertEqual(struct.unpack_from('<4f', data, index + 4), (1., 0., 0., 2.))
+        self.assertEqual(self.roundtrip(self.work/'src.mdl'), [])
+
+    def test_stale_companion_is_ignored(self):
+        self.ref_smd()
+        qc = self.work/'stale.qc'
+        qc.write_text('$modelname "stale.mdl"\n$body body "ref.smd"\n$sequence idle "ref.smd"\n')
+        model = self.compile(qc, self.work/'stale.mdl')
+        checksum = struct.unpack_from('<i', model.read_bytes(), 8)[0]
+        vtx = model.with_suffix('.dx11.vtx')
+        self.assertIsNotNone(mdl52layout.companion(str(model), '.dx11.vtx', checksum))
+        data = bytearray(vtx.read_bytes())
+        struct.pack_into('<i', data, 16, checksum + 1)
+        vtx.write_bytes(data)
+        self.assertIsNone(mdl52layout.companion(str(model), '.dx11.vtx', checksum))
+
+    def test_large_scale_animation_widens_the_scale_step(self):
+        self.ref_smd()
+        lines = ['version 1', 'nodes', '0 "root" -1', '1 "child" 0', 'end', 'skeleton']
+        for t, scale in enumerate((1., 500., 1000.)):
+            lines += ['time %d' % t, '0 0 0 0 0 0 0', '1 1 0 0 0 0 0 %g %g %g' % (scale, scale, scale)]
+        (self.work/'grow.smd').write_text('\n'.join(lines + ['end']) + '\n')
+        qc = self.work/'grow.qc'
+        qc.write_text('$modelname "grow.mdl"\n$body body "ref.smd"\n$sequence idle "ref.smd"\n$sequence grow "grow.smd"\n')
+        path = self.compile(qc, self.work/'grow.mdl')
+        model = mdl52layout.Model(path.read_bytes())
+        bones = model.bones()
+        self.assertGreater(bones[1]['scalescale'][0], 1 / 2048)
+        self.assertEqual(bones[0]['scalescale'][0], 1 / 2048)
+        pose = dc.decode_anim(model.data, model, bones, 1, [2], with_scale=True)[2][0]
+        self.assertAlmostEqual(pose[1][2][0], 1000., delta=bones[1]['scalescale'][0])
+
+    def test_rotation_at_both_ends_of_the_range(self):
+        # -pi picks Valve's negative-side scale; a value just under +pi then rounds
+        # one step past the positive limit and must still compile.
+        lines = ['version 1', 'nodes', '0 "root" -1', '1 "child" 0', 'end', 'skeleton']
+        for t, angle in enumerate((-3.14159265, 3.1415925, 0.0)):
+            lines += ['time %d' % t, '0 0 0 0 0 0 0', '1 1 0 0 %.9g 0 0' % angle]
+        (self.work/'spin.smd').write_text('\n'.join(lines + ['end']) + '\n')
+        (self.work/'ref.smd').write_text('\n'.join([
+            'version 1', 'nodes', '0 "root" -1', '1 "child" 0', 'end', 'skeleton', 'time 0', '0 0 0 0 0 0 0',
+            '1 1 0 0 0 0 0', 'end', 'triangles', 'test/material', '1 0 0 0 0 0 1 0 0 1 1 1',
+            '1 1 0 0 0 0 1 1 0 1 1 1', '1 0 1 0 0 0 1 0 1 1 1 1', 'end']) + '\n')
+        qc = self.work/'spin.qc'
+        qc.write_text('$modelname "spin.mdl"\n$body body "ref.smd"\n$sequence idle "ref.smd"\n$sequence spin "spin.smd"\n')
+        self.compile(qc, self.work/'spin.mdl')
+
+    def test_frame_encoded_animation(self):
+        bones = [{'pos': (1., 2., 3.), 'rot': (0., 0., 0.), 'scale': (1., 1., 1.), 'parent': -1},
+                 {'pos': (4., 5., 6.), 'rot': (0., 0., 0.), 'scale': (1., 1., 1.), 'parent': 0}]
+        half_turn = (0., 0., math.sqrt(.5), math.sqrt(.5))
+        # bone 0: rotation and Vector48 position every frame; bone 1: constant rotation
+        # and full-precision position (0x40)
+        flags = bytes([0x18, 0x43])
+        table = struct.pack('<4H', 0, 0, 12, 0)
+        constants = q48(half_turn) + struct.pack('<3f', 7.25, -8.5, 9.125)
+        frames = [q48((0., 0., 0., 1.)) + v48((10., 20., 30.)), q48(half_turn) + v48((-1., -2., -3.))]
+        header_size = 24 + len(flags)
+        table_at = (header_size + 3) & ~3
+        const_at = table_at + len(table)
+        frame_at = const_at + len(constants)
+        block = struct.pack('<6i', const_at, frame_at, 12, 0, table_at, 0) + flags
+        block += b'\0' * (table_at - len(block)) + table + constants + b''.join(frames)
+        for frame, expected in enumerate(((10., 20., 30.), (-1., -2., -3.))):
+            pose = dc._frame_pose(block, 0, frame, bones, False)
+            self.assertEqual(pose[0][0], expected)
+            self.assertEqual(pose[1][0], (7.25, -8.5, 9.125))
+            self.assertAlmostEqual(pose[1][1][0][1], -1., places=4)  # 90 degree yaw
+        self.assertAlmostEqual(dc._frame_pose(block, 0, 0, bones, False)[0][1][0][0], 1., places=4)
+
+    def test_rle_raw_channels(self):
+        bone = {'pos': (0., 0., 0.), 'rot': (0., 0., 0.), 'scale': (1., 1., 1.),
+                'posscale': (1., 1., 1.), 'rotscale': (1., 1., 1.), 'scalescale': (1., 1., 1.), 'parent': -1}
+        record = struct.pack('<BBh', 0, 0x02 | 0x01 | 0x40, 0) + q48((0., 0., 0., 1.)) + v48((1.5, -2., 3.)) + v48((2., 2., .5))
+        pose = dc._rle_pose(record + struct.pack('<BBh', 255, 0, 0), 0, 0, [bone], False)
+        self.assertEqual(pose[0][0], (1.5, -2., 3.))
+        self.assertEqual(pose[0][2], (2., 2., .5))
+
+    def test_vvd_fixups(self):
+        header = struct.pack('<4i8i4i', 0x56534449, 4, 0, 2, 5, 3, 0, 0, 0, 0, 0, 0, 2, 64, 88, 88 + 5*48)
+        fixups = struct.pack('<3i3i', 1, 0, 2, 0, 3, 3)
+        vvd = header + fixups
+        self.assertEqual(mdl52layout.vvd_ids(vvd), [0, 1, 3, 4, 5])
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -307,7 +307,7 @@ void BuildContext::BuildAnimations() {
         }
         for (auto& fr : a.sanim)
             for (auto& b : fr)
-                if (std::fabs(b.scale.x - 1) > 1e-4f || std::fabs(b.scale.y - 1) > 1e-4f || std::fabs(b.scale.z - 1) > 1e-4f)
+                if (!qa->noScaleFlag && (std::fabs(b.scale.x - 1) > 1e-4f || std::fabs(b.scale.y - 1) > 1e-4f || std::fabs(b.scale.z - 1) > 1e-4f))
                     a.flags |= STUDIO_HAS_SCALE;
         if (qc.staticProp) {
             for (auto& b : a.sanim[0]) {
@@ -950,11 +950,15 @@ static std::vector<uint8_t> EncodeChain(const BuildContext& ctx, const WAnim& a,
                 while (rot >= kPi) rot -= 2*kPi;
                 while (rot < -kPi) rot += 2*kPi;
                 float scale = a.sanim[f][j].scale[c] - (delta ? 0.f : bone.scale[c]);
-                const float values[3] = {rot / bone.rotscale[c], pos[c] / bone.posscale[c], scale * 2048.f};
+                const float values[3] = {rot / bone.rotscale[c], pos[c] / bone.posscale[c], scale / bone.scalescale[c]};
                 for (int g = 0; g < 3; ++g) {
                     float v = std::round(values[g]);
+                    // Valve's scale choice fits the larger side exactly, so a value just
+                    // under the other side's limit can round one step past it.
+                    if (v == 32768.f && values[g] <= 32768.5f) v = 32767.f;
                     if (!std::isfinite(v) || v < -32768 || v > 32767)
-                        Fatal("animation %s: bone %s exceeds v52 channel range", a.name.c_str(), bone.name.c_str());
+                        Fatal("animation %s: bone %s %s channel %c exceeds v52 range at frame %d (%g steps)", a.name.c_str(),
+                              bone.name.c_str(), g == 0 ? "rotation" : g == 1 ? "position" : "scale", "xyz"[c], f, values[g]);
                     channels[g][c].push_back(static_cast<int16_t>(v));
                     present[g] = present[g] || v != 0;
                 }
@@ -1346,10 +1350,14 @@ void EncodeAnimations(BuildContext& ctx) {
             }
             float scale = (-minv > maxv) ? minv / -32768.f : maxv / 32767.f;
             bones[j].rotscale[k] = scale;
+            // a stored scale (decompiled models) keeps the retail quantization grid when
+            // the animations fit it; some retail scales are slightly too small for the
+            // raw quaternion sections they were stored beside
+            for (auto& rs : ctx.qc.boneRotScales)
+                if (IEquals(rs.first, bones[j].name) &&
+                    -minv <= rs.second[k] * 32768.5f && maxv <= rs.second[k] * 32767.5f)
+                    bones[j].rotscale[k] = rs.second[k];
         }
-        // a stored scale (decompiled models) keeps the retail quantization grid
-        for (auto& rs : ctx.qc.boneRotScales)
-            if (IEquals(rs.first, bones[j].name)) bones[j].rotscale = rs.second;
     }
     // v52 position compression scales live in the bone, shared by every animation.
     for (int j = 0; j < nb; ++j) {
@@ -1359,6 +1367,19 @@ void EncodeAnimations(BuildContext& ctx) {
                 for (int f = 0; f < a.numFrames; ++f)
                     extent = std::max(extent, std::fabs(PosDelta(ctx, a, j, f)[c]));
             bones[j].posscale[c] = std::nextafter(extent / 32767.f, INFINITY);
+        }
+    }
+    // Scale steps stay at retail's 1/2048 unless an animated scale change exceeds its
+    // 16x range (retail 1000x-scaled ships animate scales by more).
+    for (int j = 0; j < nb; ++j) {
+        for (int c = 0; c < 3; ++c) {
+            float extent = 0.f;
+            for (const auto& a : ctx.anims) {
+                const bool delta = (a.flags & STUDIO_DELTA) != 0;
+                for (int f = 0; f < a.numFrames; ++f)
+                    extent = std::max(extent, std::fabs(a.sanim[f][j].scale[c] - (delta ? 0.f : bones[j].scale[c])));
+            }
+            if (extent * 2048.f > 32767.f) bones[j].scalescale[c] = std::nextafter(extent / 32767.f, INFINITY);
         }
     }
     int sf = ctx.qc.sectionFrames > 0 ? ctx.qc.sectionFrames : 30;

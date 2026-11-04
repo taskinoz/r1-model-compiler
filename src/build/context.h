@@ -47,6 +47,7 @@ struct GBone {
     Vec3 scale{1, 1, 1};
     RadianEuler rot;
     Vec3 posscale, rotscale;
+    Vec3 scalescale{1.f / 2048, 1.f / 2048, 1.f / 2048};  // retail step; widened only when needed
     Quat qAlignment;
     int group = 0;
     Vec3 bmin, bmax;

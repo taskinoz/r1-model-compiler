@@ -309,3 +309,42 @@ dialog open. The harness now closes the `messagebox-win.exe` and
 passed; no dialogs remained afterwards. A regression covers the ownership rules
 (other launches' and other installs' handlers are left alone). Python suites pass
 40 tests.
+
+
+## Native v52 decompiler and retail corpus round trip (5 November 2026)
+
+`tools/decompile52.py` and `tools/roundtrip52.py` (with `tools/mdl52layout.py`)
+decompile, recompile and compare every model in the local Titanfall Online
+`assets_dump/models` tree (3,514 models). Final run: `test-output/rt52-full3`,
+compiler SHA-256 `86e4f2aa4f6ed5d23fe53d75d76b531c5661e4b98fc7fbdc25fc51da65bfb80d`, 12 jobs.
+
+**3,486 / 3,514 identical in the compared fields.** No model that passed the
+previous full run fails in this one. The 28 remaining differences are explained:
+
+| Count | Difference | Cause |
+|---:|---|---|
+| 23 | Animation world positions off by 0.29-2.89 in (one 13.89 in) | Long cinematic and flight paths (`@cb_space_flyby_*`, `@at_hotdrop_*`, `@ca_Outpost_end_early_escape`). Retail stores them frame-encoded with floats or Vector48; the compiler only writes RLE, whose 16-bit steps over a bone's shared position range are coarser. Needs a frame-encoded writer. |
+| 3 | Compile fails: flat or degenerate collision | Retail PHY is a flat hull (pen, fish skeleton, shotgun shell; the pen's is three points with zero volume). The compiler does not build flat hulls. |
+| 1 | Compile fails: model has no bones | `weapons/arms/pov_male_anims.mdl` has no bones and only two `$includemodel` references. |
+| 1 | Texture list | `worker_base_whistle_tower_holo` lists one material five times; the compiler merges slash/case-equal names. |
+
+The comparison threshold (0.25 in world-space bone positions at the first, middle
+and last frames) is the TF2 project's and was not changed.
+
+Format and compiler findings from this work (details in docs/mdl-v52-format.md):
+
+- Frame-encoded animations (descriptor flag 0x40, 9,657 retail animations): layout,
+  bone flags (0x40 = float positions) and value order were derived from the corpus;
+  decoded rotations are unit quaternions and frame 0 lands near the bind pose.
+- `srcbonetransformindex` is file-relative in retail. The compiler wrote it
+  relative to the extended header, so the engine would have read the wrong table;
+  fixed, with a regression test.
+- Scale steps now widen per bone beyond retail's 1/2048 when an animation scales
+  more than 16x (1000x-scaled ships); rotation values one rounding step past the
+  range edge are clamped, as Valve's scale choice implies; a stored rotation scale
+  that the data exceeds is widened instead of failing.
+- 24 foliage models have corrupt per-triangle collision blocks (heap addresses as
+  vertices); they are rebuilt from the render mesh. `p_f_skits.dx11.vtx` is stale
+  (checksum mismatch) and ignored.
+
+Tests: 49 Python tests (including tests/test_decompile52.py) and both CTest groups pass.

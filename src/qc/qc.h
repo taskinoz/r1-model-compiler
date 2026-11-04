@@ -202,6 +202,7 @@ struct QcAnimation {
     int loopRestart = 0;
     bool fudgeLoop = false;
     bool noAutoIK = false;
+    bool noScaleFlag = false;  // "noscaleflag" (r1c): never set HAS_SCALE automatically
     bool rawDelta = false;  // "delta": source frames are local deltas (STUDIO_DELTA on the animation)
     // "posscale bone s" (r2c extension): the stored position step for a bone, which a
     // decompiled animation keeps so it re-quantizes onto retail's grid
@@ -422,6 +423,9 @@ struct QcModelDef {
     int respawnFlag = -1;  // explicit header 0x800000; -1 derives it
     int perTriMode = -1;  // -1 derives eligibility, 0 disables, 2 builds a tree
     bool zeroUnusedLods = false;
+    // $singleframeflag (r1c extension): mark sequences of single-frame animations with
+    // 0x80000, as some retail Titanfall builds did (consistently per model)
+    bool singleFrameFlag = false;
     struct PerTriMesh {
         bool present = false;
         Vec3 bmin, bmax;
