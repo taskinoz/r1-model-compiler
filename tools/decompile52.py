@@ -1255,11 +1255,16 @@ def decompile(path, outdir):
         att = '$attachment "%s" "%s"' % (mdl52layout.cstr(d, o + a['sznameindex']), bones[a['localbone']]['name'])
         rot = [[a['local'][r * 4 + c] for c in range(3)] for r in range(3)]
         orthonormal = all(abs(sum(rot[k][i] * rot[k][j] for k in range(3)) - (i == j)) < 1e-3 for i in range(3) for j in range(3))
-        if not orthonormal:
-            # not a rotation (retail has all-zero ones): the stored matrix as is (r2c extension)
+        ang = matrix_angles(mtx)
+        # The angles are written to six decimals of a degree; check they rebuild the
+        # stored rotation. Near gimbal lock (pitch +-90, as retail viewmodel hand
+        # attachments are) they do not, so those keep the stored matrix too.
+        written = angle_matrix([math.radians(float(fmt(math.degrees(v)))) for v in ang])
+        exact = all(abs(written[r][c] - mtx[r][c]) < 1e-5 for r in range(3) for c in range(3))
+        if not orthonormal or not exact:
+            # the stored matrix as is (r2c extension); retail also has all-zero ones
             qc.append('%s 0 0 0 matrix %s' % (att, ' '.join('%.9g' % v for v in a['local'])))
             continue
-        ang = matrix_angles(mtx)
         qc.append('%s %s %s %s rotate %s %s %s' % (
             att, fmt(mtx[0][3]), fmt(mtx[1][3]), fmt(mtx[2][3]),
             fmt(math.degrees(ang[1])), fmt(math.degrees(ang[2])), fmt(math.degrees(ang[0]))))

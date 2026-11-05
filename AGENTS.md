@@ -32,6 +32,11 @@ Read README.md, VALIDATION.md and docs/mdl-v52-format.md before changing the wri
   lines). PrecacheModel works mid-match, but a character fails until its included
   animation models are precached. Addon autorun scripts did not run on a listen
   server. R1Delta writes addonlist.txt entries indented with tabs.
+- In R1Delta scripts: Anim_Play then Anim_SetInitialTime(t) sets an exact animation
+  time; move a noclipping camera with the `setpos` console command (a script
+  SetOrigin did not move it). Viewmodel (ptpov_*) models and characters with zero
+  bounds are not drawn as world props, original or rebuilt. Weapon world models,
+  gibs and projectiles are not spawnable prop_physics.
 - Shell edits through a bash heredoc can mangle backslashes in Python strings; write
   patch scripts to a file instead.
 - Never widen comparison tolerances to make a model pass. Keep errors visible.

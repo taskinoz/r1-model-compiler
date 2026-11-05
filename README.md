@@ -258,6 +258,12 @@ to precache a model whose includes are not loaded yet. Close the pilot-loadout m
 (`squirrel ui "CloseAllMenus()"`) and aim the camera with `setang` before taking a
 screenshot with `console screenshot`.
 
+`tools/r1delta_compare.py --pairs pairs.json --report report.json` compares many
+originals with their rebuilds in one running match: bounds, every attachment at
+several times of up to three sequences (both props set to the same time), a grid
+of collision traces, a screenshot per pair, and for physics props where each copy
+comes to rest when dropped at the same spot.
+
 Cleanup removes only the owned addon, its unchanged cfg and its addon-list entry;
 other addon changes made during testing survive. It preserves logs/screenshots.
 The cfg enables developer/cheat commands for this local test session; restore

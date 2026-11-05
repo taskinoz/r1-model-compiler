@@ -471,3 +471,36 @@ addon-list entries with tabs, which the cleanup pattern did not accept (fixed). 
 grunt collection was evaluated from its last run boundary because a failed first
 include left an earlier BEGIN in the same console session; the strict collector
 correctly reported that reuse. Python tests: 60; both CTest groups pass.
+
+
+## Wide R1Delta comparison of rebuilt original-Titanfall models (6 November 2026)
+
+26 models from the original game (mp_common and mp_fracture), 17 of them TF1-only,
+were rebuilt under `r1c_rebuilt/` names with 14 included animation models (the
+pete, female and first-person sets, plus the bone-less `pov_male_anims`) and
+compared with the originals in one R1Delta match by the new
+`tools/r1delta_compare.py`. Report: `test-output/r1d-wide/report2.json`.
+
+**26 / 26 pairs without differences.** All 66 models precached. Across 1871
+attachment samples (up to three sequences, three times each, both props set to the
+same time) positions agree within 0.00039 in and orientations within 0.00009
+deg; bounds are identical; 9 downward traces per pair hit or miss both copies alike
+(within 0.001 in). Physics props dropped at the same spot rest within 0.04 in of each
+other (drop-pod doors, sentry turret, Titan arc rifle and rocket launcher); human
+gibs, weapon world models and a projectile are not spawnable as physics props for
+the original either. Categories: statics with LODs, vertex colours, translucency
+and flat collision; viewmodels; a turret; a Titan rocket pod; first-person arms and
+characters with included animation; physics props.
+
+Screenshots show the originals and rebuilds alike side by side, except viewmodels
+and a zero-bounds character, which R1Delta draws for neither copy (checked through
+their attachments only), and very small models.
+
+This run found a decompiler bug that the file comparison could not see: retail
+viewmodel hand attachments are axis permutations at -90 deg pitch, and their
+six-decimal Euler angles rebuilt a rotation up to 64 deg off (positions matched).
+The decompiler now writes the stored matrix whenever the written angles do not
+rebuild it within 1e-5, and the round trip compares every attachment's bone and
+matrix. Under that stricter comparison the corpora stay at 3,514 / 3,514 (Online,
+`rt52-full8`) and 4,130 / 4,131 (original, `rt52-tf1c`, the known retail defect).
+Compiler SHA-256 `eb0b03953ebf9d7154f1e06c6fdbd769f837ec4e798582bed52b1f7fac9947cc` (unchanged). Python tests: 62; both CTest groups pass.

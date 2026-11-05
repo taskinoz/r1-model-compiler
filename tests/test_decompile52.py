@@ -258,6 +258,21 @@ class DecompileV52(unittest.TestCase):
         self.assertEqual(names, ['shared/grid', 'shared/grid'])
         self.assertEqual(self.roundtrip(path), [])
 
+    def test_gimbal_locked_attachment_keeps_its_rotation(self):
+        # Retail viewmodel hand attachments are axis permutations (pitch -90); written
+        # as six-decimal Euler angles their yaw and roll no longer rebuild the matrix.
+        self.ref_smd()
+        qc = self.work/'hand.qc'
+        qc.write_text('$modelname "hand.mdl"\n$body body "ref.smd"\n$sequence idle "ref.smd"\n'
+                      '$attachment "R_HAND" "child" 0 0 0 matrix -5.96046448e-08 1 0 0 5.96046448e-08 '
+                      '2.98023224e-08 0.999999881 3.81469727e-06 0.999999881 8.94069672e-08 0 0\n'  # retail ptpov_smr
+                      '$attachment "TILT" "child" 0 0 0 rotate 10 20 30\n')
+        path = self.compile(qc, self.work/'hand.mdl')
+        self.assertEqual(self.roundtrip(path), [])
+        original = roundtrip52.summary(str(path))['attachments'][0][2]
+        rebuilt = roundtrip52.summary(str(self.work/'hand_dc'/'recompiled.mdl'))['attachments'][0][2]
+        self.assertLess(max(abs(a - b) for a, b in zip(original, rebuilt)), 1e-6)
+
     def test_rotation_at_both_ends_of_the_range(self):
         # -pi picks Valve's negative-side scale; a value just under +pi then rounds
         # one step past the positive limit and must still compile.

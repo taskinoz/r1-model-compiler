@@ -165,6 +165,14 @@ def summary(path):
         vols = [float(v) for v in re.findall(r'"volume"\s+"([^"]+)"', p['text'])]
         s['phy'] = {'solids': p['solidCount'], 'volume': sum(vols)}
     s['attach'] = h['numlocalattachments']
+    attachments = []
+    for i in range(h['numlocalattachments']):
+        o = h['localattachmentindex'] + i * 0x5C
+        a = mdl52layout.u(mdl52layout.ATTACH_FIELDS, d, o)
+        attachments.append((mdl52layout.cstr(d, o + a['sznameindex']),
+                            bones[a['localbone']]['name'] if 0 <= a['localbone'] < len(bones) else a['localbone'],
+                            tuple(a['local'])))
+    s['attachments'] = attachments
     s['hitboxsets'] = h['numhitboxsets']
     s['pertri'] = h['perTriAABBLeafCount']
 
@@ -262,6 +270,12 @@ def compare(a, b):
             (x[0] for x, y in zip(pa + [('',)], pb + [('',)]) if x != y), '')))
     if a['attach'] != b['attach']:
         issues.append('attachments %d vs %d' % (a['attach'], b['attach']))
+    elif [x[:2] for x in a.get('attachments', [])] != [x[:2] for x in b.get('attachments', [])]:
+        issues.append('attachment names or bones differ')
+    else:
+        worst = max([abs(u - v) for x, y in zip(a.get('attachments', []), b.get('attachments', [])) for u, v in zip(x[2], y[2])] or [0])
+        if worst > 1e-3:
+            issues.append('attachment matrices differ by %.4f' % worst)
     if a['hitboxsets'] != b['hitboxsets']:
         issues.append('hitbox sets %d vs %d' % (a['hitboxsets'], b['hitboxsets']))
     return issues

@@ -118,6 +118,16 @@ class DeltaHarnessTests(unittest.TestCase):
         self.assertEqual(seen[0],('initialize',None,None))  # R1Delta rejects an unnegotiated version header
         self.assertEqual(seen[-1],('tools/call','2025-06-18','s1'))
 
+    def test_compare_tool_measures_orientation_not_euler_angles(self):
+        import r1delta_compare as cmp
+        # pitch -90: only roll + yaw matters, so (yaw 135, roll 90) and (yaw 225, roll 0)
+        # are one orientation with different Euler angles
+        a=cmp.angle_matrix(-90,135,90); b=cmp.angle_matrix(-90,225,0)
+        self.assertLess(max(abs(x-y) for ra,rb in zip(a,b) for x,y in zip(ra,rb)),1e-9)
+        c=cmp.angle_matrix(-90,135,0)
+        self.assertGreater(max(abs(x-y) for ra,rc in zip(a,c) for x,y in zip(ra,rc)),0.5)
+        self.assertEqual(cmp.vec('(vector : (1.5, -2, 3e-05))'),(1.5,-2.0,3e-05))
+
     def test_server_pass_does_not_claim_visual_validation(self):
         run='a'*32
         session={'run_id':run,'models':[{'mount':'models/test/box.mdl'}], 'sequence':'','attachment':'','physics':False}
