@@ -63,6 +63,61 @@ class DeltaHarnessTests(unittest.TestCase):
         with self.assertRaises(ValueError): delta.prepare(self.game,[(model,'models/test/box.mdl')])
         self.assertEqual(list((self.game/'r1').iterdir()),[])
 
+    def test_mount_only_models_are_precached_first_and_not_spawned(self):
+        model=self.model()
+        anims=self.work/'anims.mdl'
+        for suffix in ('.mdl','.vvd','.dx11.vtx','.phy'):
+            if model.with_suffix(suffix).exists():
+                anims.with_suffix(suffix).write_bytes(model.with_suffix(suffix).read_bytes())
+        session=delta.prepare(self.game,[(model,'models/test/box.mdl')],extra=[(anims,'models/test/anims.mdl')])
+        script=next((Path(session['addon'])/'scripts/vscripts').glob('r1c_*.nut')).read_text()
+        self.assertLess(script.index('PrecacheModel( "models/test/anims.mdl" )'),script.index('foreach ( model in'))
+        self.assertEqual([m['mount'] for m in session['models']],['models/test/box.mdl'])
+        self.assertEqual([m['mount'] for m in session['mounted_only']],['models/test/anims.mdl'])
+        self.assertTrue((Path(session['addon'])/'models/test/anims.mdl').exists())
+        delta.cleanup(session)
+
+    def test_cleanup_accepts_r1delta_tab_indented_addon_list(self):
+        session=delta.prepare(self.game,[(self.model(),'models/test/box.mdl')])
+        listing=self.game/'r1/addonlist.txt'
+        name=Path(session['addon']).name
+        listing.write_text('"AddonList"\n{\n\t"Other"\t\t"1"\n\t"%s"\t\t"1"\n}\n'%name,encoding='utf-8')
+        delta.cleanup(session)
+        self.assertEqual(listing.read_text(),'"AddonList"\n{\n\t"Other"\t\t"1"\n}\n')
+
+    def test_mcp_client_negotiates_protocol_and_reads_event_streams(self):
+        import http.server, threading
+        import r1delta_mcp
+        seen=[]
+
+        class Fake(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_POST(self):
+                body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                seen.append((body.get('method'),self.headers.get('MCP-Protocol-Version'),self.headers.get('Mcp-Session-Id')))
+                if body.get('method')=='initialize':
+                    reply={'jsonrpc':'2.0','id':body['id'],'result':{'protocolVersion':'2025-06-18','capabilities':{}}}
+                elif body.get('method')=='tools/call':
+                    reply={'jsonrpc':'2.0','id':body['id'],'result':{'content':[{'type':'text','text':'Game State:\n  In Game: Yes'}]}}
+                else:
+                    self.send_response(202); self.end_headers(); return
+                data=('event: message\ndata: '+json.dumps(reply)+'\n\n').encode()
+                self.send_response(200)
+                self.send_header('Content-Type','text/event-stream')
+                self.send_header('Mcp-Session-Id','s1')
+                self.send_header('Content-Length',str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server=http.server.HTTPServer(('127.0.0.1',0),Fake)
+        threading.Thread(target=server.serve_forever,daemon=True).start()
+        self.addCleanup(server.shutdown)
+        client=r1delta_mcp.R1DeltaMCP(port=server.server_address[1])
+        client.connect()
+        self.assertIn('In Game: Yes',client.state())
+        self.assertEqual(seen[0],('initialize',None,None))  # R1Delta rejects an unnegotiated version header
+        self.assertEqual(seen[-1],('tools/call','2025-06-18','s1'))
+
     def test_server_pass_does_not_claim_visual_validation(self):
         run='a'*32
         session={'run_id':run,'models':[{'mount':'models/test/box.mdl'}], 'sequence':'','attachment':'','physics':False}

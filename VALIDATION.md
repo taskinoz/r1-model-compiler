@@ -449,3 +449,25 @@ mp_nexus. Reports and captures: `test-output/ig/*.json`, `*.view0.bmp`.
 | Flat collision: furniture/office_desk_accessories_pen | Both spawn; the downward trace misses both alike (retail is a flat static-only prop and cannot be a prop_physics) |
 
 Python tests: 57 (one new for `--mount-only`); both CTest groups pass.
+
+
+## Rebuilt original-Titanfall models in R1Delta (6 November 2026)
+
+R1Delta 3.0.4 was launched with `-usemcp +mcp_start_http` and driven through its MCP
+server with the new `tools/r1delta_mcp.py` (map load, scene scripts, console log,
+camera and screenshots), in a local mp_fracture match. Models came from the original
+game's VPKs and were rebuilt under `r1c_rebuilt/` paths beside the originals.
+Reports: `test-output/r1d/*-report.json`; screenshots `D:\Games\Titanfall\r1\screenshots`
+(`mp_fracture0002.tga` grunts, `mp_fracture0003.tga` ogre poses).
+
+| Case | Result |
+|---|---|
+| humans/imc_grunt/battle_rifle with the six TF1 pete animation models (frame-encoded, all different from the Online builds), `CQB_Idle` | Both render in the same pose; R_HAND matches within 0.00049 in and 0.00002 deg over five samples while it moves 3.24 in |
+| titans/ogre/OgrePoseOpen (TF1-only static, mp_wargames) | Both spawn and render alike; server probes pass |
+
+Harness findings: the TFORevive pilot-settings fallback referenced a function R1Delta
+lacks and stopped the scene script (now applied only when it exists); R1Delta indents
+addon-list entries with tabs, which the cleanup pattern did not accept (fixed). The
+grunt collection was evaluated from its last run boundary because a failed first
+include left an earlier BEGIN in the same console session; the strict collector
+correctly reported that reuse. Python tests: 60; both CTest groups pass.

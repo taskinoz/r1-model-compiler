@@ -24,6 +24,14 @@ Read README.md, VALIDATION.md and docs/mdl-v52-format.md before changing the wri
   channels, VVD fixups, anim blocks, file-relative srcbonetransformindex, stale
   companions) are in docs/mdl-v52-format.md. Check a new rule against the whole
   corpus before relying on it.
+- R1Delta (original Titanfall) can be driven unattended: launch
+  `%LOCALAPPDATA%\R1Delta\app-3.0.4\r1delta.exe -usemcp +mcp_start_http`, then use
+  tools/r1delta_mcp.py (Streamable HTTP at 127.0.0.1:8765/; send no protocol header
+  until initialize negotiates one). Its tools: execute_console_command,
+  execute_squirrel (server/client/ui), get_game_state, get_console_log (last 50
+  lines). PrecacheModel works mid-match, but a character fails until its included
+  animation models are precached. Addon autorun scripts did not run on a listen
+  server. R1Delta writes addonlist.txt entries indented with tabs.
 - Shell edits through a bash heredoc can mangle backslashes in Python strings; write
   patch scripts to a file instead.
 - Never widen comparison tolerances to make a model pass. Keep errors visible.

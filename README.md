@@ -247,6 +247,17 @@ and collection were
 verified in a live R1Delta local match. Those R1Delta runs mounted the box away from
 its `$modelname` path, which is why it was not drawn (see below).
 
+**Unattended runs through R1Delta's MCP server.** Start the game with
+`r1delta.exe -usemcp +mcp_start_http` (`-usemcp` only initialises the server;
+`mcp_start_http` serves it at `http://127.0.0.1:8765/`). `tools/r1delta_mcp.py` then
+drives it without the console: `state`, `console "map mp_fracture"`,
+`squirrel server "IncludeFile(\"r1c_<run-id>\")"` and `log`. Stage sessions before
+launching (addons are read at startup). `--mount-only` stages included animation
+models without spawning them; the scene precaches them first, because R1Delta fails
+to precache a model whose includes are not loaded yet. Close the pilot-loadout menu
+(`squirrel ui "CloseAllMenus()"`) and aim the camera with `setang` before taking a
+screenshot with `console screenshot`.
+
 Cleanup removes only the owned addon, its unchanged cfg and its addon-list entry;
 other addon changes made during testing survive. It preserves logs/screenshots.
 The cfg enables developer/cheat commands for this local test session; restore

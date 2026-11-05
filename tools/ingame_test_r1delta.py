@@ -2,6 +2,9 @@
 
 Preparation is not a runtime pass. Launch R1Delta normally, run the printed exec
 command in a local match, and collect the report. No launcher/auth changes.
+
+Unattended: launch R1Delta with `-usemcp +mcp_start_http` and drive it with
+tools/r1delta_mcp.py (map, exec, console log, screenshots) instead of the console.
 """
 import argparse
 import hashlib
@@ -20,8 +23,16 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def delta_script(run_id, models, sequence='', attachment='', physics=False):
+def delta_script(run_id, models, sequence='', attachment='', physics=False, preload=()):
+    """preload: mount-only models (e.g. included animation models) precached first.
+    R1Delta's precache of a model whose included models are not loaded yet fails
+    with "has not been precached"; loading the includes first succeeds."""
+    for model in preload:
+        common.game_path(model)  # validated relative models/...mdl path; safe to embed
     text = common.script(run_id, models, sequence, attachment, physics)
+    if preload:
+        text = text.replace('foreach ( model in R1C_PATHS )',
+                            ''.join('PrecacheModel( "%s" )\n' % m for m in preload) + 'foreach ( model in R1C_PATHS )', 1)
     text = text.replace('foreach ( model in R1C_PATHS )','R1C_Log( "BEGIN" )\nforeach ( model in R1C_PATHS )')
     text = text.replace('if ( hasPlayer ) ClientCommand( player, "screenshot" )','if ( hasPlayer ) ServerCommand( "screenshot" )')
     text = text.replace('    wait 2.0\n    local props', '    wait 1.0\n    local props')
@@ -50,16 +61,19 @@ thread R1C_Attach()
     return 'if (IsLobby()) return\n' + text.replace('R1C_', 'R1C_'+run_id+'_')
 
 
-def prepare(game, mounts, sequence='', attachment='', physics=False):
+def prepare(game, mounts, sequence='', attachment='', physics=False, extra=()):
+    """extra: further mounts staged but not spawned (e.g. included animation models)."""
     game = Path(game).resolve(strict=True)
     root = game/'r1'
     if not root.is_dir():
         raise ValueError('expected the Titanfall install containing r1/')
-    if not mounts or len({t.lower() for _, t in mounts}) != len(mounts):
+    spawned = list(mounts)
+    mounts = spawned + list(extra)
+    if not spawned or len({t.lower() for _, t in mounts}) != len(mounts):
         raise ValueError('expected unique model mounts')
     run_id = uuid.uuid4().hex
     compiler = Path(__file__).resolve().parents[1]/'build/r1studiomdl.exe'
-    script = delta_script(run_id, [t for _,t in mounts], sequence, attachment, physics)
+    script = delta_script(run_id, [t for _,t in spawned], sequence, attachment, physics, [t for _,t in extra])
     evidence = []
     for source,target in mounts:
         source = Path(source).resolve(strict=True)
@@ -97,7 +111,9 @@ def prepare(game, mounts, sequence='', attachment='', physics=False):
         cfg.write_text('developer 1\nsv_cheats 1\nscript IncludeFile("r1c_'+run_id+'")\ntoggleconsole\n',encoding='utf-8')
         updated = original[:original.rfind('}')]+'"'+addon.name+'" "1"\n'+original[original.rfind('}'):]
         listing.write_text(updated,encoding='utf-8')
-        return {'run_id':run_id,'game':str(game),'addon':str(addon),'cfg':str(cfg),
+        staged_only = [e for e in evidence if e['mount'] in {t for _,t in extra}]
+        evidence = [e for e in evidence if e not in staged_only]
+        return {'run_id':run_id,'game':str(game),'addon':str(addon),'cfg':str(cfg),'mounted_only':staged_only,
                 'command':'exec '+cfg.stem,'sequence':sequence,'attachment':attachment,'physics':physics,
                 'prepared_at_ns':time.time_ns(),'models':evidence,'script_sha256':digest(script_path),'cfg_sha256':digest(cfg),
                 'compiler_sha256':digest(compiler) if compiler.exists() else None,
@@ -150,7 +166,7 @@ def cleanup(session):
     listing = root/'addonlist.txt'
     if listing.is_symlink(): raise ValueError('linked addon list')
     text = listing.read_text(encoding='utf-8-sig') if listing.exists() else ''
-    pattern = r'(?m)^"'+re.escape(addon.name)+r'"\s+"[01]"\s*\n?'
+    pattern = r'(?m)^[ \t]*"'+re.escape(addon.name)+r'"\s+"[01]"[ \t]*\n?'  # R1Delta indents entries with tabs
     updated,n = re.subn(pattern,'',text)
     if n != 1: raise ValueError('owned addon entry missing or ambiguous')
     if cfg.is_symlink() or digest(cfg) != session['cfg_sha256']:
@@ -170,6 +186,7 @@ def main(argv=None):
     stage.add_argument('--sequence',default='')
     stage.add_argument('--attachment',default='')
     stage.add_argument('--physics',action='store_true')
+    stage.add_argument('--mount-only',action='append',default=[],help='also stage local.mdl=models/... without spawning it; repeatable')
     stage.add_argument('models',nargs='+')
     read = sub.add_parser('collect')
     read.add_argument('--session',type=Path,required=True)
@@ -181,7 +198,8 @@ def main(argv=None):
     a = p.parse_args(argv)
     if a.action == 'prepare':
         if a.session.exists(): p.error('session already exists')
-        session = prepare(a.game,[common.parse_mount(m) for m in a.models],a.sequence,a.attachment,a.physics)
+        session = prepare(a.game,[common.parse_mount(m) for m in a.models],a.sequence,a.attachment,a.physics,
+                          [common.parse_mount(m) for m in a.mount_only])
         a.session.parent.mkdir(parents=True,exist_ok=True)
         a.session.write_text(json.dumps(session,indent=2),encoding='utf-8')
         print('In a local R1Delta match: '+session['command'])

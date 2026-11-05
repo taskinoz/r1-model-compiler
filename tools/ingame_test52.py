@@ -28,15 +28,19 @@ R1C_STARTED <- false
 function R1C_Log( message ) { printl( "[R1C:%RUN%] " + message ) }
 // Offline TFORevive sessions have no loadout data, so the core script returns a
 // null pilot settings file and the local player never spawns. Fall back to a
-// stock settings file only when the original lookup fails.
-::R1C_OriginalPilotSetFile <- GetPlayerPilotSetFile
-function GetPlayerPilotSetFile( self )
+// stock settings file only when the original lookup fails. R1Delta has no such
+// script function and needs no fallback.
+if ( "GetPlayerPilotSetFile" in getroottable() )
 {
-    local file = null
-    try { file = R1C_OriginalPilotSetFile( self ) } catch ( e ) {}
-    if ( file == null )
-        file = "pilot_male_fastest"
-    return file
+    ::R1C_OriginalPilotSetFile <- GetPlayerPilotSetFile
+    ::GetPlayerPilotSetFile <- function( self )
+    {
+        local file = null
+        try { file = R1C_OriginalPilotSetFile( self ) } catch ( e ) {}
+        if ( file == null )
+            file = "pilot_male_fastest"
+        return file
+    }
 }
 function R1C_OnSpawn( player )
 {
