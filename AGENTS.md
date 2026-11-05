@@ -13,6 +13,11 @@ Read README.md, VALIDATION.md and docs/mdl-v52-format.md before changing the wri
   tools/roundtrip52.py decompiles, recompiles and compares a corpus
   (`--jobs`, `--resume`, `--discard-sources`; results.json per model). Tests:
   tests/test_decompile52.py. A full Online corpus run takes about an hour at 12 jobs.
+- Original Titanfall models: extract `models` from `vpk\englishclient_mp_*.bsp.pak000_dir.vpk`
+  with pg9182's tf2vpk (`tf2vpk unpack <vpk> <out> --include models`, with
+  `TF2VPKDEBUG=nosanitycheck`: retail TF1 metadata fails its sanity checks; CRC
+  checks stay on). One folder per VPK, then keep one copy per MDL SHA-256 with its
+  companions: 14,846 files give 4,131 unique models (3,229 identical to Online).
 - Rebuilding build\r1studiomdl.exe while a corpus run uses it breaks that run; use
   build-dev.bat for experiments meanwhile.
 - Retail format facts found by decompiling (frame-encoded animations, RLE raw

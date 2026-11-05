@@ -120,8 +120,9 @@ def summary(path):
         weights = ()
         if q['weightlistindex']:
             weights = tuple(round(w, 3) for w in struct.unpack_from('<%df' % len(bones), d, o + q['weightlistindex']))
+        animations = struct.unpack_from('<%dh' % (q['groupsize'][0] * q['groupsize'][1]), d, o + q['animindexindex'])
         seqs.append((mdl52layout.cstr(d, o + q['szlabelindex']), q['numevents'], q['groupsize'][0], q['groupsize'][1],
-                     q['flags'], keys, weights, q['numikrules']))
+                     q['flags'], keys, weights, q['numikrules'], animations))
     s['seqs'] = seqs
     anims = []
     for ai in range(h['numlocalanim']):
@@ -204,7 +205,7 @@ def compare(a, b):
         issues.append('sequence names differ')
     elif [x[4:] for x in a['seqs']] != [x[4:] for x in b['seqs']]:
         bad = [x[0] for x, y in zip(a['seqs'], b['seqs']) if x[4:] != y[4:]]
-        issues.append('sequence flags/pose keys/weights differ (%d, e.g. %s)' % (len(bad), bad[0]))
+        issues.append('sequence flags/pose keys/weights/animations differ (%d, e.g. %s)' % (len(bad), bad[0]))
     if len(a['anims']) != len(b['anims']):
         issues.append('anim count %d vs %d' % (len(a['anims']), len(b['anims'])))
     elif a['bones'] == b['bones']:

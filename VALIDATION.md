@@ -403,3 +403,30 @@ Final run `test-output/rt52-full6`, compiler SHA-256 `eb0b03953ebf9d7154f1e06c6f
   `$renamematerial`, so the compiler keeps every entry.
 
 Tests: 56 Python tests and both CTest groups pass.
+
+
+## Original Titanfall corpus (5 November 2026)
+
+Models were extracted from the original Titanfall install (`D:\Games\Titanfall\vpk`,
+English `mp_common` and the 25 map VPKs) with pg9182's tf2vpk (sanity checks off for
+retail TF1 metadata, CRC checks on): 14,846 model files, **4,131 unique by MDL
+SHA-256**, of which 3,229 are byte-identical to Titanfall Online models and 902 are
+TF1-only or differ from the Online build.
+
+Run `test-output/rt52-tf1b`, compiler SHA-256 `eb0b03953ebf9d7154f1e06c6fdbd769f837ec4e798582bed52b1f7fac9947cc`:
+**4,130 / 4,131 identical in the compared fields.** The same tools and compiler
+rerun on Online (`test-output/rt52-full7`) stay at 3,514 / 3,514.
+
+The comparison now also checks each sequence's animation indices.
+
+- `vehicle/goblin_dropship/goblin_dropship_fleetscale_1000x.mdl` (TF1 only) is a
+  retail defect: it has one animation but three of its four sequences name
+  animations 1-3, past the animation table. A QC cannot express that; the
+  decompiler writes those sequences with animation 0 and a comment, so the model
+  is reported as differing (the substituted animation also takes the looping flag
+  of `idle`).
+- Found and fixed through the TF1 set: an empty retail mesh (no triangles) naming
+  a material made the decompiler treat that material as used, dropping its
+  material-table entry (`vistas/o2_se.mdl`, `debug/debugempty`).
+
+Tests: 56 Python tests and both CTest groups pass.

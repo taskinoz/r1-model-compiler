@@ -1171,7 +1171,6 @@ def decompile(path, outdir):
                 for ei, me in enumerate(ld['meshes']):
                     mesh = meshes[ei]
                     mat = material_name[skins[0][mesh['material']] if skins else mesh['material']]
-                    mesh_materials.add(mat)
                     for sg in me['stripgroups']:
                         go = sg['_off']
                         verts = [mdl52layout.u(mdl52layout.VTX_VERT, vtx_data, go + sg['vertOffset'] + k * 9) for k in range(sg['numVerts'])]
@@ -1187,6 +1186,8 @@ def decompile(path, outdir):
                         tris.append((mat, [corner(vi) for vi in orphans[(ei, lod)]], True))
                 # DMX keeps what SMD can't: vertex colours, second UVs and the stored tangents,
                 # which also decide which vertices studiomdl kept apart
+                # only materials something is written with (an empty retail mesh can name one)
+                mesh_materials.update(t[0] for t in tris)
                 smd_name = (lod == 0 and source_name(md['name'])) or '%s_bp%d_m%d_lod%d.dmx' % (base, bpi, mi, lod)
                 os.makedirs(os.path.dirname(os.path.join(outdir, smd_name)), exist_ok=True)
                 skel = [[(b['pos'], b['rot'], b['scale']) for b in bones]]
@@ -1460,6 +1461,11 @@ def decompile(path, outdir):
         n = s['groupsize'][0] * s['groupsize'][1]
         idxs = struct.unpack_from('<%dh' % n, d, o + s['animindexindex'])
         lines = ['$sequence "%s"\n{' % label]
+        if any(not 0 <= i < len(anim_names) for i in idxs):
+            # retail defect (TF1 goblin_dropship_fleetscale_1000x): the index is past the
+            # animation table, which a QC cannot express; animation 0 stands in for it
+            lines.insert(0, '// retail sequence "%s" names animations %s; only %d exist' % (label, list(idxs), len(anim_names)))
+            idxs = [i if 0 <= i < len(anim_names) else 0 for i in idxs]
         lines.append('\t' + ' '.join('"%s"' % anim_names[i][0] for i in idxs))
         if si in seq_weights:
             lines.append('\tseqweights "%s"' % seq_weights[si])
