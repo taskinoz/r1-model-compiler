@@ -1011,7 +1011,15 @@ void BuildCollisionModel(BuildContext& ctx) {
         }
         if (s.pieces.empty()) {
             Hull h;
-            if (!MakeHull(world, h)) Fatal("collision model %s is flat or degenerate", qc.file.c_str());
+            if (!MakeHull(world, h)) {
+                // retail keeps flat collision (a pen, a shell casing) as a closed
+                // zero-volume surface
+                std::vector<DVec3> d;
+                for (auto& p : world) d.push_back(DVec3(p));
+                h = FlatHull(d);
+                if (!h.valid) Fatal("collision model %s is degenerate (no area)", qc.file.c_str());
+                Warn("collision model %s is flat: written as a zero-volume surface", qc.file.c_str());
+            }
             InsertSurfacePoints(h, world);
             s.pieces.push_back(h);
             pieceIndex = {polygons};

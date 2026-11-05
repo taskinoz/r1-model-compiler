@@ -43,6 +43,13 @@ struct Hull {
 // four non-coplanar points.
 Hull ConvexHull(const std::vector<DVec3>& pts);
 
+// A closed, zero-volume surface over coplanar points (at least three not on a line),
+// as retail stores flat collision: both sides of the points' convex outline, the
+// front fanned from one corner and the back from the next, so every edge belongs to
+// exactly two triangles (three points give a two-sided triangle, four a flattened
+// tetrahedron). Returns an invalid hull when the points do not span a plane.
+Hull FlatHull(const std::vector<DVec3>& pts);
+
 struct MassProps {
     double volume = 0;
     DVec3 center;

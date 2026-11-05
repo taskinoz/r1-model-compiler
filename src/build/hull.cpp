@@ -202,6 +202,59 @@ Hull ConvexHull(const std::vector<DVec3>& input) {
     return out;
 }
 
+Hull FlatHull(const std::vector<DVec3>& in) {
+    Hull out;
+    double size = 0;
+    for (auto& p : in) size = std::max(size, DLen(p - in[0]));
+    if (in.size() < 3 || size <= 0) return out;
+    const double eps = size * 1e-7;
+    std::vector<DVec3> pts;
+    for (auto& p : in) {
+        bool duplicate = false;
+        for (auto& q : pts) if (DLen(p - q) <= eps) { duplicate = true; break; }
+        if (!duplicate) pts.push_back(p);
+    }
+    if (pts.size() < 3) return out;
+    // the plane: the farthest point from the first, then the widest triangle
+    size_t ib = 1, ic = 0;
+    for (size_t i = 1; i < pts.size(); ++i) if (DLen(pts[i] - pts[0]) > DLen(pts[ib] - pts[0])) ib = i;
+    double best = 0;
+    for (size_t i = 1; i < pts.size(); ++i) {
+        double area = DLen(DCross(pts[ib] - pts[0], pts[i] - pts[0]));
+        if (area > best) { best = area; ic = i; }
+    }
+    if (best <= eps * size) return out;
+    DVec3 n = DCross(pts[ib] - pts[0], pts[ic] - pts[0]);
+    n = n * (1.0 / DLen(n));
+    DVec3 u = pts[ib] - pts[0];
+    u = u * (1.0 / DLen(u));
+    DVec3 v = DCross(n, u);
+    // convex outline in the plane (monotone chain), counter-clockwise about n
+    std::vector<int> order(pts.size());
+    for (size_t i = 0; i < pts.size(); ++i) order[i] = static_cast<int>(i);
+    auto x = [&](int i) { return DDot(pts[i] - pts[0], u); };
+    auto y = [&](int i) { return DDot(pts[i] - pts[0], v); };
+    std::sort(order.begin(), order.end(), [&](int a, int b) { return x(a) < x(b) || (x(a) == x(b) && y(a) < y(b)); });
+    auto turn = [&](int o, int a, int b) { return (x(a) - x(o)) * (y(b) - y(o)) - (y(a) - y(o)) * (x(b) - x(o)); };
+    std::vector<int> outline;
+    for (int pass = 0; pass < 2; ++pass) {
+        size_t start = outline.size();
+        for (int i : order) {
+            while (outline.size() >= start + 2 && turn(outline[outline.size() - 2], outline.back(), i) <= eps * size) outline.pop_back();
+            outline.push_back(i);
+        }
+        outline.pop_back();
+        std::reverse(order.begin(), order.end());
+    }
+    const int k = static_cast<int>(outline.size());
+    if (k < 3) return out;
+    for (int i : outline) out.verts.push_back(pts[i]);
+    for (int i = 1; i + 1 < k; ++i) out.tris.push_back({0, i, i + 1});                // front, about n
+    for (int i = 2; i < k; ++i) out.tris.push_back({1, (i + 1) % k, i});             // back, fanned from corner 1
+    out.valid = true;
+    return out;
+}
+
 MassProps ComputeMassProps(const Hull& h) {
     MassProps m;
     double V = 0;

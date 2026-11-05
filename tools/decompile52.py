@@ -973,6 +973,16 @@ def decompile(path, outdir):
         o = h['textureindex'] + i * 0x40
         tex.append(mdl52layout.cstr(d, o + struct.unpack_from('<i', d, o)[0]))
     cds = [mdl52layout.cstr(d, struct.unpack_from('<i', d, h['cdtextureindex'] + i * 4)[0]) or '' for i in range(h['numcdtextures'])]
+    # Retail can list one material several times, one entry per mesh. The compiler
+    # merges equal names, so later copies get a distinct source name renamed back.
+    material_name = list(tex)
+    seen = {}
+    for i, t in enumerate(tex):
+        key = (t or '').lower().replace(chr(92), '/')
+        if key in seen:
+            material_name[i] = '%s_r1c_copy%d' % (t, i)
+        else:
+            seen[key] = i
     skins = []
     for fi in range(h['numskinfamilies']):
         skins.append(list(struct.unpack_from('<%dh' % h['numskinref'], d, h['skinindex'] + fi * h['numskinref'] * 2)))
@@ -1160,7 +1170,7 @@ def decompile(path, outdir):
                 tris = []
                 for ei, me in enumerate(ld['meshes']):
                     mesh = meshes[ei]
-                    mat = tex[skins[0][mesh['material']]] if skins else tex[mesh['material']]
+                    mat = material_name[skins[0][mesh['material']] if skins else mesh['material']]
                     mesh_materials.add(mat)
                     for sg in me['stripgroups']:
                         go = sg['_off']
@@ -1211,6 +1221,9 @@ def decompile(path, outdir):
         for fam in skins:
             qc.append('\t{ ' + ' '.join('"%s"' % tex[fam[i]] for i in used) + ' }')
         qc.append('}')
+    for i, t in enumerate(tex):
+        if material_name[i] != t:
+            qc.append('$renamematerial "%s" "%s"' % (material_name[i], t))
     # material-table entries no mesh or skin family uses (animation-only models keep them)
     referenced = {t.lower() for t in mesh_materials}
     if len(skins) > 1:  # only the columns the texture group writes; the others list every texture

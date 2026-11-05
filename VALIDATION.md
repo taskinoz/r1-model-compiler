@@ -384,3 +384,22 @@ Causes found and fixed while closing the animation differences:
 
 The independent reader (`tools/mdl52.py`) now decodes frame-encoded blocks and raw
 RLE channels itself. Tests: 53 Python tests and both CTest groups pass.
+
+
+## Complete retail round trip (5 November 2026)
+
+Final run `test-output/rt52-full6`, compiler SHA-256 `eb0b03953ebf9d7154f1e06c6fdbd769f837ec4e798582bed52b1f7fac9947cc`:
+**3,514 / 3,514 identical in the compared fields.** The last five differences:
+
+- Flat collision (pen, fish skeleton, shotgun shell): retail stores coplanar points
+  as a closed zero-volume surface (three points: a two-sided triangle; four: a
+  flattened tetrahedron). The compiler now builds the same surface when the points
+  span a plane but no volume (front fanned from one corner, back from the next, so
+  every edge has two triangles); points, triangles and masses match retail.
+- `weapons/arms/pov_male_anims.mdl` has no bones and only includes two models; the
+  compiler accepts a bone-less model when it has no bodies, animations or sequences.
+- `worker_base_whistle_tower_holo` lists one material five times, one entry per
+  mesh. The decompiler gives later copies distinct source names renamed back with
+  `$renamematerial`, so the compiler keeps every entry.
+
+Tests: 56 Python tests and both CTest groups pass.

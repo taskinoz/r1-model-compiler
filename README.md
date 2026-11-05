@@ -8,7 +8,7 @@ source frontend and build pipeline but writing the native v52 layouts.
 Titanfall Online's locally inspected models also use v52. They are useful format
 references, but matching that version does not establish runtime compatibility.
 The authored examples pass **TFORevive dedicated-server and client** runs, and
-**3,509 of 3,514 retail Titanfall Online models round-trip** through the v52
+**all 3,514 retail Titanfall Online models round-trip** through the v52
 decompiler and compiler with every compared field matching.
 See [VALIDATION.md](VALIDATION.md) for the precise evidence and limitations.
 

@@ -336,7 +336,10 @@ void BuildContext::BuildBones() {
             }
         }
     }
-    if (bones.empty()) Fatal("model has no bones");
+    // A model with no geometry or animation of its own (retail pov_male_anims only
+    // includes other models) has no bones either.
+    if (bones.empty() && (!qc.bodyParts.empty() || !qc.animations.empty() || !qc.sequences.empty()))
+        Fatal("model has no bones");
     for (auto& bone : bones)
         for (int c = 0; c < 3; c++)
             if (!std::isfinite(bone.scale[c]) || bone.scale[c] <= 0)

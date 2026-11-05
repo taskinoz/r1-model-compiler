@@ -205,6 +205,59 @@ class DecompileV52(unittest.TestCase):
         bones = mdl52layout.Model(path.read_bytes()).bones()
         self.assertAlmostEqual(bones[1]['posscale'][0], step, places=7)
 
+    def test_flat_collision_is_a_closed_zero_volume_surface(self):
+        self.ref_smd()
+        cases = {'tri': [(0, 0, 0), (4, 0, 0), (0, 2, 0)],
+                 'quad': [(0, 0, 0), (4, 0, 0), (4, 2, 0), (0, 2, 0)]}
+        expected = {'tri': [(0, 1, 2), (1, 0, 2)]}
+        for name, corners in cases.items():
+            with self.subTest(case=name):
+                lines = ['version 1', 'nodes', '0 "root" -1', 'end', 'skeleton', 'time 0', '0 0 0 0 0 0 0', 'end', 'triangles']
+                for tri in ([0, 1, 2], [0, 2, 3]) if len(corners) == 4 else ([0, 1, 2],):
+                    lines.append('phys')
+                    lines += ['0 %g %g %g 0 0 1 0 0 1 0 1' % corners[i] for i in tri]
+                (self.work/(name + '_phys.smd')).write_text('\n'.join(lines + ['end']) + '\n')
+                qc = self.work/(name + '.qc')
+                qc.write_text('$modelname "%s.mdl"\n$body body "ref.smd"\n$sequence idle "ref.smd"\n'
+                              '$collisionmodel "%s_phys.smd" { $mass 1 }\n' % (name, name))
+                path = self.compile(qc, self.work/(name + '.mdl'))
+                import phy
+                solid = phy.parse_phy(path.with_suffix('.phy').read_bytes())['solids'][0]
+                ledge = [L for L in solid['ledges'] if not L['has_children']][0]
+                tris = [tuple(e['start'] for e in t['edges']) for t in ledge['tris']]
+                self.assertEqual(len(solid['points']), len(corners))
+                self.assertEqual(len(tris), 2 * (len(corners) - 2))
+                edges = {}
+                for t in tris:
+                    for k in range(3):
+                        edges[(t[k], t[(k + 1) % 3])] = edges.get((t[k], t[(k + 1) % 3]), 0) + 1
+                self.assertTrue(all(count == 1 and edges.get((b, a)) == 1 for (a, b), count in edges.items()))  # closed
+                if name in expected:
+                    self.assertEqual(tris, expected[name])
+
+    def test_include_only_model_without_bones(self):
+        qc = self.work/'include.qc'
+        qc.write_text('$modelname "include.mdl"\n$includemodel "test/other.mdl"\n')
+        model = mdl52layout.Model(self.compile(qc, self.work/'include.mdl').read_bytes())
+        self.assertEqual((model.hdr['numbones'], model.hdr['numincludemodels'], model.hdr['numlocalseq']), (0, 1, 0))
+
+    def test_repeated_material_entries_are_kept(self):
+        lines = ['version 1', 'nodes', '0 "root" -1', 'end', 'skeleton', 'time 0', '0 0 0 0 0 0 0', 'end', 'triangles']
+        for k, material in enumerate(('shared/grid', 'shared/grid_copy1')):
+            lines.append(material)
+            lines += ['0 %d 0 0 0 0 1 0 0 1 0 1' % (2 * k), '0 %d 1 0 0 0 1 0 0 1 0 1' % (2 * k + 1), '0 %d 0 1 0 0 1 0 0 1 0 1' % (2 * k)]
+        (self.work/'two.smd').write_text('\n'.join(lines + ['end']) + '\n')
+        qc = self.work/'two.qc'
+        qc.write_text('$modelname "two.mdl"\n$body body "two.smd"\n$renamematerial "shared/grid_copy1" "shared/grid"\n'
+                      '$sequence idle "two.smd"\n')
+        path = self.compile(qc, self.work/'two.mdl')
+        model = mdl52layout.Model(path.read_bytes())
+        h = model.hdr
+        names = [mdl52layout.cstr(model.data, h['textureindex'] + i*0x40 + struct.unpack_from('<i', model.data, h['textureindex'] + i*0x40)[0])
+                 for i in range(h['numtextures'])]
+        self.assertEqual(names, ['shared/grid', 'shared/grid'])
+        self.assertEqual(self.roundtrip(path), [])
+
     def test_rotation_at_both_ends_of_the_range(self):
         # -pi picks Valve's negative-side scale; a value just under +pi then rounds
         # one step past the positive limit and must still compile.
