@@ -167,6 +167,12 @@ things the TFO client needs, learned from MRVN-Radiant's `tools/respawn/tfo_harn
 python tools\ingame_test52.py --game "D:\Games\Titanfall Online" --cwd-bin --sequence= --timeout 300 --report test-output\tfo-client.json out\box.mdl=models/r1c_examples/box.mdl <native ashcan_standing.mdl>=models/domestic/ashcan_standing.mdl
 ```
 
+`--mount-only local.mdl=models/...` stages a model without spawning it, for example
+the animation models a character includes. To compare a rebuilt retail model with the
+original in one scene, compile it under a new `$modelname` (for example
+`r1c_rebuilt/<original path>`, with its `$includemodel` lines pointing at rebuilt
+copies) and mount the original at its own path as the control.
+
 Only one TFO instance can run, and other tools (such as MRVN-Radiant's map
 harness) share `Mods/` and `Logs/tforevive.log`; the harness refuses to start
 while `TFO.exe` or `tfods.exe` is running. Window captures are for visual review

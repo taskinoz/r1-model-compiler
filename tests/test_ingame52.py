@@ -177,6 +177,24 @@ class HarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,r'\$modelname path models/r1c_examples/box.mdl'):
             harness.parse_mount(f'{model}=models/test/box.mdl')
 
+    def test_mount_only_models_are_staged_but_not_spawned(self):
+        box=self.compiled_model()
+        other=self.work/'other'
+        other.mkdir()
+        for suffix in ('.mdl','.vvd','.dx11.vtx','.phy'):
+            if box.with_suffix(suffix).exists():
+                (other/('box'+suffix)).write_bytes(box.with_suffix(suffix).read_bytes())
+        # a mount-only model (for example an included animation model) is copied into
+        # the mod with its companions but left out of the spawned list
+        extra=[harness.parse_mount(f'{other/"box.mdl"}=models/r1c_examples/box.mdl')]
+        mod,evidence,_=harness.prepare(self.game,extra,self.run,'',extra=extra)
+        try:
+            source=(mod/'mod/scripts/vscripts/r1c_model_test.nut').read_text()
+            self.assertTrue((mod/'mod/models/r1c_examples/box.mdl').exists())
+            self.assertIn('R1C_PATHS <- []',source)
+        finally:
+            harness.safe_cleanup(mod,self.game/'Mods',self.run)
+
     def test_prepare_only_is_explicitly_not_runtime_pass(self):
         model=self.compiled_model()
         report=self.work/'report.json'

@@ -230,7 +230,7 @@ def safe_cleanup(mod,mods,run_id):
     shutil.rmtree(mod)
 
 
-def prepare(game,mounts,run_id,sequence='idle',attachment='',physics=False,dedicated=False):
+def prepare(game,mounts,run_id,sequence='idle',attachment='',physics=False,dedicated=False,extra=()):
     if not re.fullmatch(r'[a-f0-9]{32}',run_id):
         raise ValueError('invalid run ID')
     mods=game/'Mods'
@@ -271,7 +271,7 @@ def prepare(game,mounts,run_id,sequence='idle',attachment='',physics=False,dedic
         # The installed game script is used only in this temporary local override.
         # Proprietary script contents are never included in the repository/report.
         (scripts/'_mapspawn.nut').write_bytes(base_bytes+b'\nIncludeScript( "r1c_model_test", getroottable() )\n')
-        (scripts/'r1c_model_test.nut').write_text(script(run_id,[t for _,t in mounts],sequence,attachment,physics,dedicated),encoding='utf-8')
+        (scripts/'r1c_model_test.nut').write_text(script(run_id,[t for _,t in mounts if (_,t) not in extra],sequence,attachment,physics,dedicated),encoding='utf-8')
         return mod,evidence,hashlib.sha256(base_bytes).hexdigest()
     except BaseException:
         safe_cleanup(mod,mods,run_id)
@@ -519,6 +519,7 @@ def read_runtime_log(path,original_size,original_prefix):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('models',nargs='+')
+    parser.add_argument('--mount-only',action='append',default=[],help='also mount this local.mdl=models/... without spawning it (e.g. included animation models); repeatable')
     parser.add_argument('--game',type=Path,default=os.environ.get('TITANFALL_ONLINE_DIR'))
     parser.add_argument('--map',default='mp_nexus')
     parser.add_argument('--sequence',default='idle')
@@ -555,12 +556,13 @@ def main(argv=None):
     process=None
     try:
         mounts=[parse_mount(m) for m in args.models]
+        extra=[parse_mount(m) for m in args.mount_only]
         if not args.prepare_only and os.name=='nt':
             for image in ('TFO.exe','tfods.exe'):
                 tasks=subprocess.check_output(['tasklist','/FO','CSV','/NH','/FI','IMAGENAME eq '+image],text=True)
                 if any(row and row[0].lower()==image.lower() for row in csv.reader(tasks.splitlines())):
                     raise ValueError(image+' is already running; close it before starting an isolated harness run')
-        mod,evidence,base_hash=prepare(game,mounts,run_id,args.sequence,args.attachment,args.physics,args.dedicated)
+        mod,evidence,base_hash=prepare(game,mounts+extra,run_id,args.sequence,args.attachment,args.physics,args.dedicated,extra)
         report.update(models=evidence,mod=str(mod),base_mapspawn_sha256=base_hash,
                       harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                       reader_sha256=hashlib.sha256(Path(mdl52.__file__).read_bytes()).hexdigest())

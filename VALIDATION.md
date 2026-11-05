@@ -430,3 +430,22 @@ The comparison now also checks each sequence's animation indices.
   material-table entry (`vistas/o2_se.mdl`, `debug/debugempty`).
 
 Tests: 56 Python tests and both CTest groups pass.
+
+
+## Rebuilt retail models in the TFO client (5 November 2026)
+
+Retail models were decompiled, recompiled under `r1c_rebuilt/<original path>` (with
+included animation models redirected to rebuilt copies, mounted with the new
+`--mount-only` option) and spawned beside the originals in one TFO client scene on
+mp_nexus. Reports and captures: `test-output/ig/*.json`, `*.view0.bmp`.
+
+| Case | Result |
+|---|---|
+| Static: domestic/ashcan_standing | Retail and rebuilt render alike; traces hit both at 33.8387 in |
+| Static: domestic/sign_beer | Both spawn; the small flat sign lies in grass and is not a usable visual check |
+| Animated (RLE with raw channels): creatures/flyer/flyer_a + flyer_anims, `Idle` | Both render in the same pose; HEADSHOT attachment offset identical (0.00000 in), angles within 0.031 deg |
+| Animated (frame-encoded): humans/imc_grunt/battle_rifle + six pete animation models, `CQB_Idle` | Both render in the same pose; R_HAND matches within 0.00005 in and 0.00002 deg over five samples while it moves 3.24 in |
+| Physics: domestic/pizza_box | Both drop and settle (104.94 vs 109.25 in, on different terrain) |
+| Flat collision: furniture/office_desk_accessories_pen | Both spawn; the downward trace misses both alike (retail is a flat static-only prop and cannot be a prop_physics) |
+
+Python tests: 57 (one new for `--mount-only`); both CTest groups pass.
