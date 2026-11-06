@@ -127,7 +127,7 @@ animation tests use spawn points and model-bounded traces, with positive hits.
 
 These are SERVER-ONLY smoke tests, not visual proof, native retail roundtrips,
 full-frame equivalence or complete ragdoll/procedural/LOD support. The client GPU
-crash still prevents rendering validation. Physics control geometry differs from
+crash still prevented rendering validation at this point (client runs succeeded later; see below). Physics control geometry differs from
 the authored box, so its drop distance is a functional control, not an equality test.
 
 Updated R1Delta 3.0.4 was also tried. Direct Titanfall.exe explicitly requires its

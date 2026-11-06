@@ -94,8 +94,8 @@ python tools\survey52.py "D:\path\to\extracted\models" --out test-output\survey.
 Python 3.10+ and the standard library are sufficient. `R1C_COMPILER` selects an
 alternate executable. The reader checks file bounds, native tables, companion
 checksums, VVD vertex/skin/fixup data and packed DX11 strip indices. `--decode`
-decodes every frame of compiler-produced RLE; raw, frame and external retail
-animation encodings are not supported by that decoder yet.
+decodes every frame of RLE (including raw channels) and frame-encoded animations;
+animations stored in external `.ani` blocks are decoded by tools/decompile52.py only.
 
 `tools/legacy_v53`, `tests/legacy_v53` and `docs/reference` preserve the inherited
 TF2 tools and evidence for reference. They are **not native v52 tools or validation**.
