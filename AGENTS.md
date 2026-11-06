@@ -39,6 +39,9 @@ Read README.md, VALIDATION.md and docs/mdl-v52-format.md before changing the wri
   gibs and projectiles are not spawnable prop_physics.
 - Shell edits through a bash heredoc can mangle backslashes in Python strings; write
   patch scripts to a file instead.
+- Releases: tools/package.ps1 builds the ZIP, tools/check_package.ps1 checks a fresh
+  extraction. Pushing tag vX.Y.Z runs .github/workflows/release.yml, which needs
+  release-notes/vX.Y.Z.md and a matching pyproject.toml version.
 - Never widen comparison tolerances to make a model pass. Keep errors visible.
 - Native retail files and generated outputs stay ignored in test-output/.
 - Keep validation output small; preserve reports, remove regenerated meshes/models.

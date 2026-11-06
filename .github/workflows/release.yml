@@ -1,0 +1,72 @@
+name: Release
+
+# Pushing a tag vX.Y.Z builds, tests and packages that commit and publishes a GitHub
+# release with the ZIP and SHA256SUMS.txt. The notes come from release-notes/vX.Y.Z.md.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check release notes and version
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          if (-not (Test-Path "release-notes/$tag.md")) { throw "release-notes/$tag.md is missing." }
+          $version = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne $tag) { throw "pyproject.toml version $version does not match tag $tag." }
+
+      - name: Build (Release x64)
+        shell: cmd
+        run: build.bat
+
+      - name: Test
+        shell: pwsh
+        run: |
+          Push-Location build
+          $registered = ctest -N
+          if (-not ($registered -match 'compiler_regressions')) {
+              throw 'The Python regression tests were not registered (Python 3 not found by CMake).'
+          }
+          ctest --output-on-failure
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Test with uv
+        shell: pwsh
+        env:
+          R1C_COMPILER: build/r1studiomdl.exe
+        run: |
+          uv run --locked python -m unittest discover -s tests -p "test_*.py"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          ./tools/package.ps1
+          ./tools/check_package.ps1
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $notes = (Get-Content -Raw "release-notes/$tag.md").TrimEnd()
+          $sums = (Get-Content -Raw dist/SHA256SUMS.txt).TrimEnd() -replace 'r1studiomdl.exe$', 'r1studiomdl.exe (inside ZIP)'
+          $body = $notes + "`n`nSHA-256 (built by this workflow):`n`n``````text`n" + $sums + "`n```````n"
+          [IO.File]::WriteAllText("$env:RUNNER_TEMP/notes.md", $body)
+          gh release create $tag dist/r1-model-compiler-win64.zip dist/SHA256SUMS.txt --title "r1-model-compiler $tag" --notes-file "$env:RUNNER_TEMP/notes.md" --verify-tag
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

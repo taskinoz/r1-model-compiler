@@ -48,9 +48,26 @@ jobs:
           uv run --locked python -m unittest discover -s tests -p "test_*.py"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+      # The release ZIP, checked from a fresh extraction: the three examples compile,
+      # decompile and recompile with the packaged executable and tools.
+      - name: Package
+        shell: pwsh
+        run: |
+          ./tools/package.ps1
+          ./tools/check_package.ps1
+
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
           name: r1studiomdl-win64
           path: build/r1studiomdl.exe
+          retention-days: 14
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: r1-model-compiler-win64
+          path: |
+            dist/r1-model-compiler-win64.zip
+            dist/SHA256SUMS.txt
           retention-days: 14

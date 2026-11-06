@@ -13,6 +13,14 @@ Titanfall models round-trip** through the v52
 decompiler and compiler with every compared field matching.
 See [VALIDATION.md](VALIDATION.md) for the precise evidence and limitations.
 
+Releases: download `r1-model-compiler-win64.zip` from the
+[GitHub releases](https://github.com/taskinoz/r1-model-compiler/releases). It holds the
+compiler, the Python tools, documentation and examples, with SHA-256 sums.
+
+This is one of a family of Respawn model compilers: `r1studiomdl` (Titanfall 1 and
+Online, MDL v52) and [r2studiomdl](https://github.com/taskinoz/r2-model-compiler)
+(Titanfall 2, MDL v53).
+
 ## Build and use
 
 Install Visual Studio 2022 with C++ tools and CMake, then run:
@@ -78,6 +86,18 @@ by some retail builds), `$texture "name"` (material entries no mesh uses),
 `$boneposscale` (a bone's retail position step, kept when the data fits it) and the
 animation options `frameanim` (frame-encoded, as retail stored it) and `noscaleflag`
 (scaled bones without HAS_SCALE).
+
+## Packaging and releases
+
+```powershell
+.	ools\package.ps1         # dist1-model-compiler-win64.zip and SHA256SUMS.txt
+.	ools\check_package.ps1   # extract it fresh; compile and round-trip the examples
+```
+
+CI runs both on every push and keeps the ZIP as an artifact. To release, set
+`version` in pyproject.toml, add `release-notes/vX.Y.Z.md`, then push a tag `vX.Y.Z`:
+the release workflow builds, tests, packages and publishes it with the notes and
+SHA-256 sums.
 
 ## Tests and inspection
 
